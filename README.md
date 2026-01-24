@@ -7,7 +7,7 @@ Variables de entorno (mismas credenciales que el bot, sin exponer en frontend):
 - `BQ_PROJECT_ID`
 - `BQ_DATASET`
 - `BQ_TABLE`
-- `DASHBOARD_TOKEN`
+- `DASHBOARD_TOKEN` (token de acceso read-only para el API del dashboard)
 
 ## Correr local
 

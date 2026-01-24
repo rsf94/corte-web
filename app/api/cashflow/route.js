@@ -24,6 +24,16 @@ function validateToken(token) {
   return token === expected;
 }
 
+function getTokenFromRequest(request) {
+  const authHeader = request.headers.get("authorization") ?? "";
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+
+  const { searchParams } = new URL(request.url);
+  return searchParams.get("token");
+}
+
 function parseMonthParam(value) {
   const normalized = normalizeMonthStart(value);
   if (!normalized) return null;
@@ -117,17 +127,17 @@ function addToTotals(target, key, amount) {
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
-    const token = searchParams.get("token");
+    const token = getTokenFromRequest(request);
     const chatId = searchParams.get("chat_id");
     const from = searchParams.get("from");
     const to = searchParams.get("to");
 
-    if (!token || !chatId) {
-      return new Response("Missing token or chat_id", { status: 400 });
+    if (!token || !validateToken(token)) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!validateToken(token)) {
-      return new Response("Unauthorized", { status: 401 });
+    if (!chatId) {
+      return new Response("Missing chat_id", { status: 400 });
     }
 
     const fromISO = parseMonthParam(from);
