@@ -51,6 +51,8 @@ export default async function Dashboard({ searchParams }) {
     const res = await fetch(apiUrl.toString(), { cache: "no-store" });
     if (res.ok) {
       data = await res.json();
+    } else if (res.status === 401) {
+      error = "No autorizado";
     } else {
       const text = await res.text();
       error = text || `Error ${res.status}`;
