@@ -1,7 +1,7 @@
 # ---- deps ----
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
+COPY package*.json ./
 RUN npm ci
 
 # ---- build ----
@@ -22,4 +22,5 @@ COPY --from=build /app ./
 
 EXPOSE 8080
 ENV PORT=8080
-CMD ["npm","run","start","--","-p","8080"]
+ENV HOSTNAME=0.0.0.0
+CMD ["npm","run","start"]
