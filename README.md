@@ -14,6 +14,8 @@ Variables de entorno (mismas credenciales que el bot, sin exponer en frontend):
 - `NEXTAUTH_SECRET` (32+ caracteres aleatorios)
 - `ALLOWED_EMAILS` (lista separada por comas de emails autorizados)
 
+> Nota: El build no debe requerir credenciales de auth. Las variables de NextAuth se evalúan en runtime.
+
 ## Correr local
 
 ```bash
