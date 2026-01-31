@@ -1,4 +1,7 @@
 import { BigQuery } from "@google-cloud/bigquery";
+import { getServerSession } from "next-auth";
+import { getAuthOptions } from "../../../lib/auth.js";
+import { isEmailAllowed } from "../../../lib/allowed_emails.js";
 import { getCashflowMonthForPurchase } from "../../../lib/cashflow.js";
 import { getMonthRange, normalizeMonthStart } from "../../../lib/months.js";
 
@@ -127,13 +130,21 @@ function addToTotals(target, key, amount) {
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
-    const token = getTokenFromRequest(request);
+    const session = await getServerSession(getAuthOptions());
     const chatId = searchParams.get("chat_id");
     const from = searchParams.get("from");
     const to = searchParams.get("to");
 
-    if (!token || !validateToken(token)) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    if (session) {
+      const email = session.user?.email ?? "";
+      if (!isEmailAllowed(email)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    } else {
+      const token = getTokenFromRequest(request);
+      if (!token || !validateToken(token)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
     }
 
     if (!chatId) {
