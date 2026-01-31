@@ -54,3 +54,10 @@ Para Cloud Run:
 1. Configura `NEXTAUTH_URL` con la URL pública del servicio.
 2. Define `ALLOWED_EMAILS` con los correos permitidos (ej. `persona@dominio.com,otra@dominio.com`).
 3. Agrega `NEXTAUTH_SECRET` con una cadena aleatoria segura.
+
+Variables requeridas en runtime (Cloud Run):
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `NEXTAUTH_SECRET`
+- `NEXTAUTH_URL`
