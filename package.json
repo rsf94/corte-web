@@ -7,11 +7,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --test"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^7.9.0",
     "next": "14.2.7",
+    "next-auth": "^4.24.7",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },

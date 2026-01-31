@@ -1,4 +1,8 @@
+import { getServerSession } from "next-auth";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { getAuthOptions } from "../../lib/auth.js";
+import { isEmailAllowed } from "../../lib/allowed_emails.js";
 import { addMonthsISO, startOfMonthISO } from "../../lib/date_utils.js";
 import { getMonthRange, monthToInputValue } from "../../lib/months.js";
 
@@ -20,8 +24,21 @@ function formatCurrency(value) {
 }
 
 export default async function Dashboard({ searchParams }) {
-  const token = searchParams.token ?? "";
+  const session = await getServerSession(getAuthOptions());
+  const email = session?.user?.email ?? "";
+  const hasSession = Boolean(session);
+
+  if (hasSession && !isEmailAllowed(email)) {
+    redirect("/no-autorizado");
+  }
+
+  const token = hasSession ? "" : (searchParams.token ?? "");
   const chatId = searchParams.chat_id ?? "";
+  const usingTokenFallback = !hasSession && token && chatId;
+
+  if (!hasSession && !usingTokenFallback) {
+    redirect("/login");
+  }
 
   const baseMonth = currentMonthISO();
   const defaultFrom = addMonthsISO(baseMonth, -5);
@@ -37,13 +54,15 @@ export default async function Dashboard({ searchParams }) {
   let data = null;
   let error = null;
 
-  if (token && chatId) {
+  if (chatId && (hasSession || usingTokenFallback)) {
     const hdrs = headers();
     const host = hdrs.get("host");
     const proto = hdrs.get("x-forwarded-proto") ?? "http";
     const baseUrl = host ? `${proto}://${host}` : "";
     const apiUrl = new URL("/api/cashflow", baseUrl || "http://localhost:3000");
-    apiUrl.searchParams.set("token", token);
+    if (usingTokenFallback) {
+      apiUrl.searchParams.set("token", token);
+    }
     apiUrl.searchParams.set("chat_id", chatId);
     apiUrl.searchParams.set("from", fromISO);
     apiUrl.searchParams.set("to", toISO);
@@ -67,8 +86,14 @@ export default async function Dashboard({ searchParams }) {
       </div>
 
       <form className="mt-6 flex flex-wrap items-end gap-4" method="get">
-        <input type="hidden" name="token" value={token} />
-        <input type="hidden" name="chat_id" value={chatId} />
+        {!hasSession ? (
+          <>
+            <input type="hidden" name="token" value={token} />
+            <input type="hidden" name="chat_id" value={chatId} />
+          </>
+        ) : (
+          <input type="hidden" name="chat_id" value={chatId} />
+        )}
         <label className="flex flex-col gap-1 text-sm">
           Desde
           <input
@@ -95,9 +120,15 @@ export default async function Dashboard({ searchParams }) {
         </button>
       </form>
 
-      {!token || !chatId ? (
+      {!chatId ? (
         <div className="mt-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Agrega <strong>token</strong> y <strong>chat_id</strong> en la URL para ver el dashboard.
+          Agrega <strong>chat_id</strong> en la URL para ver el dashboard.
+        </div>
+      ) : null}
+
+      {usingTokenFallback ? (
+        <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+          Estás usando acceso por token. Inicia sesión con Google para acceso directo.
         </div>
       ) : null}
 
