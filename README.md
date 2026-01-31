@@ -47,6 +47,8 @@ Compatible con Vercel o Cloud Run. Asegura las env vars arriba y expone el endpo
 GET /api/cashflow?token=...&chat_id=...&from=YYYY-MM-01&to=YYYY-MM-01
 ```
 
+**TODO (temporary workaround):** El build en Cloud Build usa `npm install` en el Dockerfile porque el `package-lock.json` está fuera de sync con `package.json`. Regenerar y commitear un lockfile actualizado para volver a `npm ci` y lograr builds determinísticos.
+
 Para Cloud Run:
 
 1. Configura `NEXTAUTH_URL` con la URL pública del servicio.
