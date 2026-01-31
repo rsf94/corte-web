@@ -1,6 +1,4 @@
 import { createRequire } from "node:module";
-import { getAuthOptions } from "../../../../lib/auth.js";
-
 const require = createRequire(import.meta.url);
 const requiredAuthEnv = [
   "GOOGLE_CLIENT_ID",
@@ -9,14 +7,51 @@ const requiredAuthEnv = [
   "NEXTAUTH_URL"
 ];
 
+function getNextResponse() {
+  try {
+    return require("next/server").NextResponse;
+  } catch (error) {
+    return null;
+  }
+}
+
+function jsonResponse(payload, init) {
+  const NextResponse = getNextResponse();
+  if (NextResponse?.json) {
+    return NextResponse.json(payload, init);
+  }
+
+  return new Response(JSON.stringify(payload), {
+    status: init?.status ?? 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...init?.headers
+    }
+  });
+}
+
+function htmlResponse(html, init) {
+  const NextResponse = getNextResponse();
+  if (NextResponse) {
+    return new NextResponse(html, init);
+  }
+
+  return new Response(html, {
+    status: init?.status ?? 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      ...init?.headers
+    }
+  });
+}
+
 function getMissingAuthEnv() {
   return requiredAuthEnv.filter((name) => !process.env[name]);
 }
 
 function authMisconfiguredResponse(request) {
-  const { NextResponse } = require("next/server");
   if (request.nextUrl?.pathname?.endsWith("/signin")) {
-    return new NextResponse(
+    return htmlResponse(
       `<!doctype html>
 <html lang="en">
   <head>
@@ -38,18 +73,35 @@ function authMisconfiguredResponse(request) {
     );
   }
 
-  return NextResponse.json({ error: "Auth misconfigured" }, { status: 500 });
+  return jsonResponse({ error: "Auth misconfigured" }, { status: 500 });
 }
 
-async function handler(request, context) {
+async function handleAuth(request, context) {
   const missing = getMissingAuthEnv();
   if (missing.length > 0) {
+    console.error("Auth misconfigured: missing env vars", missing);
     return authMisconfiguredResponse(request);
   }
 
-  const NextAuth = require("next-auth");
-  const authHandler = NextAuth(getAuthOptions());
-  return authHandler(request, context);
+  try {
+    const NextAuthImport = require("next-auth");
+    const NextAuth = NextAuthImport?.default ?? NextAuthImport;
+    const { getAuthOptions } = await import("../../../../lib/auth.js");
+    const authHandler = NextAuth(getAuthOptions());
+    return authHandler(request, context);
+  } catch (error) {
+    console.error("Auth handler failure", {
+      name: error?.name,
+      message: error?.message
+    });
+    return jsonResponse({ error: "Auth error" }, { status: 500 });
+  }
 }
 
-export { handler as GET, handler as POST };
+export async function GET(request, context) {
+  return handleAuth(request, context);
+}
+
+export async function POST(request, context) {
+  return handleAuth(request, context);
+}
