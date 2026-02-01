@@ -1,7 +1,8 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
-import { isEmailAllowed } from "../../../lib/allowed_emails.js";
+import { logAccessDenied } from "../../../lib/access_log.js";
+import { getAllowedEmails, isEmailAllowed } from "../../../lib/allowed_emails.js";
 import { getCashflowMonthForPurchase } from "../../../lib/cashflow.js";
 import { getMonthRange, normalizeMonthStart } from "../../../lib/months.js";
 
@@ -129,20 +130,41 @@ function addToTotals(target, key, amount) {
 
 export async function GET(request) {
   try {
-    const { searchParams } = new URL(request.url);
+    const requestUrl = new URL(request.url);
+    const { searchParams } = requestUrl;
     const session = await getServerSession(getAuthOptions());
+    const allowedEmails = getAllowedEmails();
     const chatId = searchParams.get("chat_id");
     const from = searchParams.get("from");
     const to = searchParams.get("to");
 
+    if (!allowedEmails.length) {
+      logAccessDenied({
+        reason: "missing_allowlist",
+        email: session?.user?.email ?? "",
+        path: requestUrl.pathname
+      });
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     if (session) {
       const email = session.user?.email ?? "";
       if (!isEmailAllowed(email)) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
+        logAccessDenied({
+          reason: "email_not_allowed",
+          email,
+          path: requestUrl.pathname
+        });
+        return Response.json({ error: "Forbidden" }, { status: 403 });
       }
     } else {
       const token = getTokenFromRequest(request);
       if (!token || !validateToken(token)) {
+        logAccessDenied({
+          reason: "missing_session",
+          email: "",
+          path: requestUrl.pathname
+        });
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
     }
