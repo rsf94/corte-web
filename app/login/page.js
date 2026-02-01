@@ -1,7 +1,8 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
+import { evaluateSessionAccess } from "../../lib/access_control.js";
+import { logAccessDenied } from "../../lib/access_log.js";
 import { getAuthOptions } from "../../lib/auth.js";
-import { isEmailAllowed } from "../../lib/allowed_emails.js";
 import LoginButton from "./login-button.js";
 
 export const dynamic = "force-dynamic";
@@ -9,9 +10,14 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage() {
   const session = await getServerSession(getAuthOptions());
   if (session) {
-    const email = session.user?.email ?? "";
-    if (!isEmailAllowed(email)) {
-      redirect("/no-autorizado");
+    const access = evaluateSessionAccess(session);
+    if (access.status !== "ok") {
+      logAccessDenied({
+        reason: access.status,
+        email: access.email,
+        path: "/login"
+      });
+      redirect("/unauthorized");
     }
     redirect("/dashboard");
   }

@@ -1,8 +1,10 @@
 import { getServerSession } from "next-auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { evaluateSessionAccess, getDashboardRedirect } from "../../lib/access_control.js";
+import { logAccessDenied } from "../../lib/access_log.js";
 import { getAuthOptions } from "../../lib/auth.js";
-import { isEmailAllowed } from "../../lib/allowed_emails.js";
+import { getAllowedEmails } from "../../lib/allowed_emails.js";
 import { addMonthsISO, startOfMonthISO } from "../../lib/date_utils.js";
 import { getMonthRange, monthToInputValue } from "../../lib/months.js";
 
@@ -25,19 +27,28 @@ function formatCurrency(value) {
 
 export default async function Dashboard({ searchParams }) {
   const session = await getServerSession(getAuthOptions());
-  const email = session?.user?.email ?? "";
-  const hasSession = Boolean(session);
-
-  if (hasSession && !isEmailAllowed(email)) {
-    redirect("/no-autorizado");
+  const allowedEmails = getAllowedEmails();
+  if (!allowedEmails.length) {
+    logAccessDenied({ reason: "missing_allowlist", email: "", path: "/dashboard" });
+    redirect("/unauthorized");
   }
-
+  const access = evaluateSessionAccess(session, allowedEmails);
+  const hasSession = access.status === "ok";
   const token = hasSession ? "" : (searchParams.token ?? "");
   const chatId = searchParams.chat_id ?? "";
-  const usingTokenFallback = !hasSession && token && chatId;
+  const usingTokenFallback = !hasSession && token && chatId && allowedEmails.length > 0;
 
-  if (!hasSession && !usingTokenFallback) {
-    redirect("/login");
+  const redirectTo = getDashboardRedirect({
+    sessionStatus: access.status,
+    usingTokenFallback
+  });
+  if (redirectTo) {
+    logAccessDenied({
+      reason: access.status === "ok" ? "missing_session" : access.status,
+      email: access.email,
+      path: "/dashboard"
+    });
+    redirect(redirectTo);
   }
 
   const baseMonth = currentMonthISO();
@@ -71,7 +82,9 @@ export default async function Dashboard({ searchParams }) {
     if (res.ok) {
       data = await res.json();
     } else if (res.status === 401) {
-      error = "No autorizado";
+      redirect("/login");
+    } else if (res.status === 403) {
+      redirect("/unauthorized");
     } else {
       const text = await res.text();
       error = text || `Error ${res.status}`;
