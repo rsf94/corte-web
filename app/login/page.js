@@ -7,8 +7,16 @@ import LoginButton from "./login-button.js";
 
 export const dynamic = "force-dynamic";
 
-export default async function LoginPage() {
+function resolveCallbackUrl(value) {
+  if (!value) return "/dashboard";
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (typeof candidate !== "string") return "/dashboard";
+  return candidate.startsWith("/") ? candidate : "/dashboard";
+}
+
+export default async function LoginPage({ searchParams }) {
   const session = await getServerSession(getAuthOptions());
+  const callbackUrl = resolveCallbackUrl(searchParams?.callbackUrl);
   if (session) {
     const access = evaluateSessionAccess(session);
     if (access.status !== "ok") {
@@ -19,7 +27,7 @@ export default async function LoginPage() {
       });
       redirect("/unauthorized");
     }
-    redirect("/dashboard");
+    redirect(callbackUrl);
   }
 
   return (
@@ -28,7 +36,7 @@ export default async function LoginPage() {
       <p className="mt-3 text-sm text-slate-600">
         Inicia sesión con Google para ver tu dashboard.
       </p>
-      <LoginButton />
+      <LoginButton callbackUrl={callbackUrl} />
     </main>
   );
 }

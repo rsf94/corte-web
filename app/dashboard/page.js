@@ -7,6 +7,7 @@ import { getAuthOptions } from "../../lib/auth.js";
 import { getAllowedEmails } from "../../lib/allowed_emails.js";
 import { addMonthsISO, startOfMonthISO } from "../../lib/date_utils.js";
 import { getMonthRange, monthToInputValue } from "../../lib/months.js";
+import { fetchActiveLinksByEmail, touchUserLink } from "../../lib/user_links.js";
 
 export const dynamic = "force-dynamic";
 
@@ -35,8 +36,21 @@ export default async function Dashboard({ searchParams }) {
   const access = evaluateSessionAccess(session, allowedEmails);
   const hasSession = access.status === "ok";
   const token = hasSession ? "" : (searchParams.token ?? "");
-  const chatId = searchParams.chat_id ?? "";
-  const usingTokenFallback = !hasSession && token && chatId && allowedEmails.length > 0;
+  const chatIdParam = searchParams.chat_id ?? "";
+  const usingTokenFallback = !hasSession && token && chatIdParam && allowedEmails.length > 0;
+  let chatId = chatIdParam;
+  let linkedChats = [];
+
+  if (!chatId && hasSession) {
+    linkedChats = await fetchActiveLinksByEmail(access.email);
+    if (linkedChats.length === 1) {
+      chatId = linkedChats[0].chat_id;
+    }
+  }
+
+  if (chatId && hasSession) {
+    await touchUserLink({ email: access.email, chatId });
+  }
 
   const redirectTo = getDashboardRedirect({
     sessionStatus: access.status,
@@ -133,7 +147,35 @@ export default async function Dashboard({ searchParams }) {
         </button>
       </form>
 
-      {!chatId ? (
+      {!chatId && hasSession && linkedChats.length > 1 ? (
+        <div className="mt-6 rounded border border-slate-200 bg-white p-4 text-sm text-slate-700">
+          <p className="font-medium">Selecciona un chat vinculado:</p>
+          <ul className="mt-3 space-y-2">
+            {linkedChats.map((link) => (
+              <li key={link.chat_id}>
+                <a
+                  className="text-slate-900 underline"
+                  href={`/dashboard?chat_id=${encodeURIComponent(link.chat_id)}`}
+                >
+                  {link.chat_id}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {!chatId && hasSession && linkedChats.length === 0 ? (
+        <div className="mt-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          Cuenta no vinculada. Solicita el enlace con <strong>/dashboard</strong> en Telegram y
+          vuelve a abrirlo en este navegador.{" "}
+          <a className="underline" href="/link">
+            Ver instrucciones
+          </a>
+        </div>
+      ) : null}
+
+      {!chatId && !hasSession ? (
         <div className="mt-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Agrega <strong>chat_id</strong> en la URL para ver el dashboard.
         </div>
