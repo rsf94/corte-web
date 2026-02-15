@@ -114,7 +114,90 @@ test("cashflow route uses LINKED chat_id from user_links for BigQuery cashflow q
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(chatIdsUsed, [linkedChatId, linkedChatId, linkedChatId]);
+    assert.deepEqual(chatIdsUsed, [linkedChatId]);
+  } finally {
+    restore();
+  }
+});
+
+test("cashflow route excludes MSI rows when exclude_msi=true", async () => {
+  const restore = withEnv({
+    ALLOWED_EMAILS: "user@example.com",
+    BQ_PROJECT_ID: "project",
+    BQ_DATASET: "dataset",
+    BQ_TABLE: "expenses"
+  });
+
+  let aggregateQuery = "";
+
+  try {
+    const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
+    const req = new Request(
+      "http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-02-01&exclude_msi=true"
+    );
+
+    const response = await handleCashflowGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        if (query.includes("user_links")) {
+          return [[{ chat_id: "linked-chat-123" }]];
+        }
+
+        aggregateQuery = query;
+        return [[{ card_name: "BBVA", billing_month: "2024-01-01", total: 100 }]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(aggregateQuery, /\(is_msi IS NULL OR is_msi = FALSE\)/);
+    assert.doesNotMatch(aggregateQuery, /GENERATE_DATE_ARRAY/);
+
+    const body = await response.json();
+    assert.equal(body.rows[0].totals["2024-01"], 100);
+  } finally {
+    restore();
+  }
+});
+
+test("cashflow route prorates MSI rows when exclude_msi=false", async () => {
+  const restore = withEnv({
+    ALLOWED_EMAILS: "user@example.com",
+    BQ_PROJECT_ID: "project",
+    BQ_DATASET: "dataset",
+    BQ_TABLE: "expenses"
+  });
+
+  let aggregateQuery = "";
+
+  try {
+    const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
+    const req = new Request("http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-03-01");
+
+    const response = await handleCashflowGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        if (query.includes("user_links")) {
+          return [[{ chat_id: "linked-chat-123" }]];
+        }
+
+        aggregateQuery = query;
+        return [[
+          { card_name: "BBVA", billing_month: "2024-01-01", total: 100 },
+          { card_name: "BBVA", billing_month: "2024-02-01", total: 100 },
+          { card_name: "BBVA", billing_month: "2024-03-01", total: 100 }
+        ]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(aggregateQuery, /GENERATE_DATE_ARRAY/);
+    assert.match(aggregateQuery, /COALESCE\(msi_total_amount, amount_mxn\)/);
+    assert.match(aggregateQuery, /msi_months > 0/);
+
+    const body = await response.json();
+    assert.equal(body.rows[0].totals["2024-01"], 100);
+    assert.equal(body.rows[0].totals["2024-02"], 100);
+    assert.equal(body.rows[0].totals["2024-03"], 100);
   } finally {
     restore();
   }
