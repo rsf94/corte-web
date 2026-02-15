@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 const bq = new BigQuery({
   projectId: process.env.BQ_PROJECT_ID || undefined
 });
+const defaultQueryFn = (options) => bq.query(options);
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -18,24 +19,6 @@ function requiredEnv(name) {
     throw new Error(`Missing env ${name}`);
   }
   return value;
-}
-
-function validateToken(token) {
-  const expected = process.env.DASHBOARD_TOKEN;
-  if (!expected) {
-    throw new Error("Missing DASHBOARD_TOKEN");
-  }
-  return token === expected;
-}
-
-function getTokenFromRequest(request) {
-  const authHeader = request.headers.get("authorization") ?? "";
-  if (authHeader.toLowerCase().startsWith("bearer ")) {
-    return authHeader.slice(7).trim();
-  }
-
-  const { searchParams } = new URL(request.url);
-  return searchParams.get("token");
 }
 
 function parseMonthParam(value) {
@@ -48,7 +31,7 @@ function buildMonths(fromISO, toISO) {
   return getMonthRange(fromISO, toISO);
 }
 
-async function fetchCardRules(chatId) {
+async function fetchCardRules(chatId, queryFn = defaultQueryFn) {
   const dataset = requiredEnv("BQ_DATASET");
   const query = `
     SELECT card_name, cut_day, pay_offset_days, roll_weekend_to_monday
@@ -57,7 +40,7 @@ async function fetchCardRules(chatId) {
     ORDER BY card_name
   `;
 
-  const [rows] = await bq.query({
+  const [rows] = await queryFn({
     query,
     params: { chat_id: String(chatId) }
   });
@@ -70,7 +53,7 @@ async function fetchCardRules(chatId) {
   }));
 }
 
-async function fetchNoMsiAggregates({ chatId, fromISO, toISO }) {
+async function fetchNoMsiAggregates({ chatId, fromISO, toISO }, queryFn = defaultQueryFn) {
   const dataset = requiredEnv("BQ_DATASET");
   const query = `
     SELECT payment_method AS card_name, purchase_date, SUM(amount_mxn) AS total
@@ -81,7 +64,7 @@ async function fetchNoMsiAggregates({ chatId, fromISO, toISO }) {
     GROUP BY card_name, purchase_date
   `;
 
-  const [rows] = await bq.query({
+  const [rows] = await queryFn({
     query,
     params: {
       chat_id: String(chatId),
@@ -97,7 +80,7 @@ async function fetchNoMsiAggregates({ chatId, fromISO, toISO }) {
   }));
 }
 
-async function fetchMsiAggregates({ chatId, fromISO, toISO }) {
+async function fetchMsiAggregates({ chatId, fromISO, toISO }, queryFn = defaultQueryFn) {
   const dataset = requiredEnv("BQ_DATASET");
   const query = `
     SELECT card_name, billing_month, SUM(amount_mxn) AS total
@@ -107,7 +90,7 @@ async function fetchMsiAggregates({ chatId, fromISO, toISO }) {
     GROUP BY card_name, billing_month
   `;
 
-  const [rows] = await bq.query({
+  const [rows] = await queryFn({
     query,
     params: {
       chat_id: String(chatId),
@@ -128,18 +111,38 @@ function addToTotals(target, key, amount) {
   target[key] = current + amount;
 }
 
-export async function GET(request) {
+async function fetchLinkedChatIdByEmail(email, queryFn = defaultQueryFn) {
+  const dataset = requiredEnv("BQ_DATASET");
+  const query = `
+    SELECT chat_id
+    FROM \`${requiredEnv("BQ_PROJECT_ID")}.${dataset}.user_links\`
+    WHERE email = @email AND status = "LINKED"
+    ORDER BY linked_at DESC
+    LIMIT 1
+  `;
+
+  const [rows] = await queryFn({
+    query,
+    params: { email: String(email) }
+  });
+  if (!rows.length) {
+    return "";
+  }
+  return String(rows[0].chat_id || "");
+}
+
+export async function handleCashflowGet(
+  request,
+  {
+    getSession = () => getServerSession(getAuthOptions()),
+    queryFn = defaultQueryFn
+  } = {}
+) {
   try {
     const requestUrl = new URL(request.url);
     const { searchParams } = requestUrl;
-    let session = null;
-    try {
-      session = await getServerSession(getAuthOptions());
-    } catch {
-      session = null;
-    }
+    const session = await getSession();
     const allowedEmails = getAllowedEmails();
-    const chatId = searchParams.get("chat_id");
     const from = searchParams.get("from");
     const to = searchParams.get("to");
 
@@ -152,30 +155,28 @@ export async function GET(request) {
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    if (session) {
-      const email = session.user?.email ?? "";
-      if (!isEmailAllowed(email)) {
-        logAccessDenied({
-          reason: "email_not_allowed",
-          email,
-          path: requestUrl.pathname
-        });
-        return Response.json({ error: "Forbidden" }, { status: 403 });
-      }
-    } else {
-      const token = getTokenFromRequest(request);
-      if (!token || !validateToken(token)) {
-        logAccessDenied({
-          reason: "missing_session",
-          email: "",
-          path: requestUrl.pathname
-        });
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    if (!session) {
+      logAccessDenied({
+        reason: "missing_session",
+        email: "",
+        path: requestUrl.pathname
+      });
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const email = session.user?.email ?? "";
+    if (!isEmailAllowed(email)) {
+      logAccessDenied({
+        reason: "email_not_allowed",
+        email,
+        path: requestUrl.pathname
+      });
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const chatId = await fetchLinkedChatIdByEmail(email, queryFn);
     if (!chatId) {
-      return Response.json({ error: "Missing chat_id" }, { status: 400 });
+      return Response.json({ error: "Cuenta no vinculada" }, { status: 403 });
     }
 
     const fromISO = parseMonthParam(from);
@@ -187,9 +188,9 @@ export async function GET(request) {
 
     const months = buildMonths(fromISO, toISO);
     const [cardRules, noMsiRows, msiRows] = await Promise.all([
-      fetchCardRules(chatId),
-      fetchNoMsiAggregates({ chatId, fromISO, toISO }),
-      fetchMsiAggregates({ chatId, fromISO, toISO })
+      fetchCardRules(chatId, queryFn),
+      fetchNoMsiAggregates({ chatId, fromISO, toISO }, queryFn),
+      fetchMsiAggregates({ chatId, fromISO, toISO }, queryFn)
     ]);
 
     const rowsByCard = new Map();
@@ -241,4 +242,8 @@ export async function GET(request) {
   } catch (error) {
     return Response.json({ error: error.message ?? "Server error" }, { status: 500 });
   }
+}
+
+export async function GET(request) {
+  return handleCashflowGet(request);
 }

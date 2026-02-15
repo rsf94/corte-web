@@ -120,7 +120,12 @@ export default async function Dashboard({ searchParams }) {
     apiUrl.searchParams.set("from", fromISO);
     apiUrl.searchParams.set("to", toISO);
 
-    const res = await fetch(apiUrl.toString(), { cache: "no-store" });
+    const res = await fetch(apiUrl.toString(), {
+      cache: "no-store",
+      headers: {
+        cookie: hdrs.get("cookie") ?? ""
+      }
+    });
     if (res.ok) {
       data = await res.json();
     } else if (res.status === 401) {
