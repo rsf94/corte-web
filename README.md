@@ -27,7 +27,7 @@ Dataset: `BQ_DATASET`. Crear la tabla `user_links` con el siguiente esquema:
 | `chat_id` | STRING | Chat ID de Telegram |
 | `status` | STRING | `ACTIVE` / `REVOKED` |
 | `linked_at` | TIMESTAMP | Fecha de vinculación |
-| `last_used_at` | TIMESTAMP | Último uso (opcional) |
+| `last_seen_at` | TIMESTAMP | Último uso (opcional) |
 
 Ejemplo de DDL:
 
@@ -37,7 +37,7 @@ CREATE TABLE `${BQ_PROJECT_ID}.${BQ_DATASET}.user_links` (
   chat_id STRING,
   status STRING,
   linked_at TIMESTAMP,
-  last_used_at TIMESTAMP
+  last_seen_at TIMESTAMP
 );
 ```
 

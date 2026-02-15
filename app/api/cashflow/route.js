@@ -132,7 +132,12 @@ export async function GET(request) {
   try {
     const requestUrl = new URL(request.url);
     const { searchParams } = requestUrl;
-    const session = await getServerSession(getAuthOptions());
+    let session = null;
+    try {
+      session = await getServerSession(getAuthOptions());
+    } catch {
+      session = null;
+    }
     const allowedEmails = getAllowedEmails();
     const chatId = searchParams.get("chat_id");
     const from = searchParams.get("from");
@@ -170,14 +175,14 @@ export async function GET(request) {
     }
 
     if (!chatId) {
-      return new Response("Missing chat_id", { status: 400 });
+      return Response.json({ error: "Missing chat_id" }, { status: 400 });
     }
 
     const fromISO = parseMonthParam(from);
     const toISO = parseMonthParam(to);
 
     if (!fromISO || !toISO) {
-      return new Response("Invalid from/to", { status: 400 });
+      return Response.json({ error: "Invalid from/to" }, { status: 400 });
     }
 
     const months = buildMonths(fromISO, toISO);
@@ -234,6 +239,6 @@ export async function GET(request) {
 
     return Response.json({ months, rows, totals });
   } catch (error) {
-    return new Response(error.message ?? "Server error", { status: 500 });
+    return Response.json({ error: error.message ?? "Server error" }, { status: 500 });
   }
 }
