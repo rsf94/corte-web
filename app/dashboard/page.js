@@ -40,16 +40,26 @@ export default async function Dashboard({ searchParams }) {
   const usingTokenFallback = !hasSession && token && chatIdParam && allowedEmails.length > 0;
   let chatId = chatIdParam;
   let linkedChats = [];
+  let linkLookupFailed = false;
 
   if (!chatId && hasSession) {
-    linkedChats = await fetchActiveLinksByEmail(access.email);
-    if (linkedChats.length === 1) {
-      chatId = linkedChats[0].chat_id;
+    try {
+      linkedChats = await fetchActiveLinksByEmail(access.email);
+      if (linkedChats.length === 1) {
+        chatId = linkedChats[0].chat_id;
+      }
+    } catch {
+      linkLookupFailed = true;
+      linkedChats = [];
     }
   }
 
   if (chatId && hasSession) {
-    await touchUserLink({ email: access.email, chatId });
+    try {
+      await touchUserLink({ email: access.email, chatId });
+    } catch {
+      // Non-blocking best-effort update.
+    }
   }
 
   const redirectTo = getDashboardRedirect({
@@ -167,11 +177,14 @@ export default async function Dashboard({ searchParams }) {
 
       {!chatId && hasSession && linkedChats.length === 0 ? (
         <div className="mt-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Cuenta no vinculada. Solicita el enlace con <strong>/dashboard</strong> en Telegram y
+          No tienes tu cuenta vinculada. Solicita el enlace con <strong>/dashboard</strong> en Telegram y
           vuelve a abrirlo en este navegador.{" "}
           <a className="underline" href="/link">
             Ver instrucciones
           </a>
+          {linkLookupFailed ? (
+            <p className="mt-2">No pudimos validar tus vínculos en este momento. Intenta de nuevo.</p>
+          ) : null}
         </div>
       ) : null}
 
