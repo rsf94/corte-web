@@ -4,10 +4,15 @@ import { redirect } from "next/navigation";
 import { evaluateSessionAccess, getDashboardRedirect } from "../../lib/access_control.js";
 import { logAccessDenied } from "../../lib/access_log.js";
 import { getAuthOptions } from "../../lib/auth.js";
+import { handleDashboardLinkToken } from "../../lib/dashboard_link_handler.js";
 import { getAllowedEmails } from "../../lib/allowed_emails.js";
 import { addMonthsISO, startOfMonthISO } from "../../lib/date_utils.js";
 import { getMonthRange, monthToInputValue } from "../../lib/months.js";
-import { fetchActiveLinksByEmail, touchUserLink } from "../../lib/user_links.js";
+import {
+  consumeLinkTokenAppendOnly,
+  fetchLatestLinkedChatIdByEmail,
+  touchUserLink
+} from "../../lib/user_links.js";
 
 export const dynamic = "force-dynamic";
 
@@ -35,22 +40,35 @@ export default async function Dashboard({ searchParams }) {
   }
   const access = evaluateSessionAccess(session, allowedEmails);
   const hasSession = access.status === "ok";
+
+  const linkToken = searchParams.link_token ?? "";
+  const requestId = headers().get("x-request-id") ?? "";
+  const provider = session?.user?.provider || "google";
+  const sessionState = {};
+  const linkHandling = await handleDashboardLinkToken({
+    linkToken,
+    hasSession,
+    email: access.email,
+    provider,
+    requestId,
+    sessionState,
+    consumeLinkToken: consumeLinkTokenAppendOnly
+  });
+  if (linkHandling.redirectTo) {
+    redirect(linkHandling.redirectTo);
+  }
+
   const token = hasSession ? "" : (searchParams.token ?? "");
   const chatIdParam = searchParams.chat_id ?? "";
   const usingTokenFallback = !hasSession && token && chatIdParam && allowedEmails.length > 0;
-  let chatId = chatIdParam;
-  let linkedChats = [];
+  let chatId = chatIdParam || sessionState.chat_id || "";
   let linkLookupFailed = false;
 
   if (!chatId && hasSession) {
     try {
-      linkedChats = await fetchActiveLinksByEmail(access.email);
-      if (linkedChats.length === 1) {
-        chatId = linkedChats[0].chat_id;
-      }
+      chatId = await fetchLatestLinkedChatIdByEmail(access.email);
     } catch {
       linkLookupFailed = true;
-      linkedChats = [];
     }
   }
 
@@ -157,31 +175,15 @@ export default async function Dashboard({ searchParams }) {
         </button>
       </form>
 
-      {!chatId && hasSession && linkedChats.length > 1 ? (
-        <div className="mt-6 rounded border border-slate-200 bg-white p-4 text-sm text-slate-700">
-          <p className="font-medium">Selecciona un chat vinculado:</p>
-          <ul className="mt-3 space-y-2">
-            {linkedChats.map((link) => (
-              <li key={link.chat_id}>
-                <a
-                  className="text-slate-900 underline"
-                  href={`/dashboard?chat_id=${encodeURIComponent(link.chat_id)}`}
-                >
-                  {link.chat_id}
-                </a>
-              </li>
-            ))}
-          </ul>
+      {linkHandling.error ? (
+        <div className="mt-6 rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {linkHandling.error}
         </div>
       ) : null}
 
-      {!chatId && hasSession && linkedChats.length === 0 ? (
+      {!chatId && hasSession ? (
         <div className="mt-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          No tienes tu cuenta vinculada. Solicita el enlace con <strong>/dashboard</strong> en Telegram y
-          vuelve a abrirlo en este navegador.{" "}
-          <a className="underline" href="/link">
-            Ver instrucciones
-          </a>
+          No tienes tu cuenta vinculada. Pide <strong>/dashboard</strong> en Telegram.
           {linkLookupFailed ? (
             <p className="mt-2">No pudimos validar tus vínculos en este momento. Intenta de nuevo.</p>
           ) : null}
