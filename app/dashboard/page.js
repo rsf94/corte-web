@@ -8,6 +8,7 @@ import { handleDashboardLinkToken } from "../../lib/dashboard_link_handler.js";
 import { getAllowedEmails } from "../../lib/allowed_emails.js";
 import { addMonthsISO, startOfMonthISO } from "../../lib/date_utils.js";
 import { getMonthRange, monthToInputValue } from "../../lib/months.js";
+import CashflowTable from "./cashflow-table.js";
 import {
   consumeLinkTokenAppendOnly,
   fetchLatestLinkedChatIdByEmail,
@@ -22,14 +23,6 @@ function currentMonthISO() {
   return base.toISOString().slice(0, 10);
 }
 
-function formatCurrency(value) {
-  return new Intl.NumberFormat("es-MX", {
-    style: "currency",
-    currency: "MXN",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(value || 0);
-}
 
 export default async function Dashboard({ searchParams }) {
   const session = await getServerSession(getAuthOptions());
@@ -214,40 +207,15 @@ export default async function Dashboard({ searchParams }) {
       ) : null}
 
       {data ? (
-        <div className="mt-6 overflow-x-auto rounded border border-slate-200 bg-white shadow-sm">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-100 text-left">
-              <tr>
-                <th className="px-4 py-3">Tarjeta</th>
-                {months.map((month) => (
-                  <th key={month} className="px-4 py-3 text-right">
-                    {month}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((row) => (
-                <tr key={row.card_name} className="border-t border-slate-100">
-                  <td className="px-4 py-3 font-medium">{row.card_name}</td>
-                  {months.map((month) => (
-                    <td key={month} className="px-4 py-3 text-right tabular-nums">
-                      {formatCurrency(row.totals[month] ?? 0)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-              <tr className="border-t border-slate-200 bg-slate-50 font-semibold">
-                <td className="px-4 py-3">TOTAL</td>
-                {months.map((month) => (
-                  <td key={month} className="px-4 py-3 text-right tabular-nums">
-                    {formatCurrency(data.totals[month] ?? 0)}
-                  </td>
-                ))}
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <CashflowTable
+          months={months}
+          initialData={data}
+          fromISO={fromISO}
+          toISO={toISO}
+          token={token}
+          chatId={chatId}
+          usingTokenFallback={usingTokenFallback}
+        />
       ) : null}
     </main>
   );
