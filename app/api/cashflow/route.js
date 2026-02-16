@@ -39,67 +39,124 @@ async function fetchExpenseAggregates(
   queryFn = defaultQueryFn
 ) {
   const dataset = requiredEnv("BQ_DATASET");
-  const table = `\`${requiredEnv("BQ_PROJECT_ID")}.${dataset}.${requiredEnv("BQ_TABLE")}\``;
+  const projectId = requiredEnv("BQ_PROJECT_ID");
+  const expensesTable = `\`${projectId}.${dataset}.${requiredEnv("BQ_TABLE")}\``;
+  const cardRulesTable = `\`${projectId}.${dataset}.card_rules\``;
 
-  const query = excludeMsi
-    ? `
-      SELECT
-        payment_method AS card_name,
-        DATE_TRUNC(purchase_date, MONTH) AS billing_month,
-        SUM(amount_mxn) AS total
-      FROM ${table}
+  const query = `
+    WITH statement_months AS (
+      SELECT statement_month
+      FROM UNNEST(
+        GENERATE_DATE_ARRAY(DATE(@from_date), DATE(@to_date), INTERVAL 1 MONTH)
+      ) AS statement_month
+    ),
+    rules AS (
+      SELECT card_name, cut_day, billing_shift_months
+      FROM ${cardRulesTable}
       WHERE chat_id = @chat_id
-        AND (is_msi IS NULL OR is_msi = FALSE)
-        AND DATE_TRUNC(purchase_date, MONTH) BETWEEN DATE(@from_date) AND DATE(@to_date)
-      GROUP BY card_name, billing_month
-    `
-    : `
-      WITH non_msi AS (
-        SELECT
-          payment_method AS card_name,
-          DATE_TRUNC(purchase_date, MONTH) AS billing_month,
-          amount_mxn AS amount
-        FROM ${table}
-        WHERE chat_id = @chat_id
-          AND (is_msi IS NULL OR is_msi = FALSE OR msi_months IS NULL OR msi_months = 0)
-      ),
-      msi_expanded AS (
-        SELECT
-          payment_method AS card_name,
-          billing_month,
-          SAFE_DIVIDE(COALESCE(msi_total_amount, amount_mxn), msi_months) AS amount
-        FROM ${table},
-        UNNEST(
-          GENERATE_DATE_ARRAY(
-            DATE_TRUNC(COALESCE(msi_start_month, purchase_date), MONTH),
-            DATE_ADD(
-              DATE_TRUNC(COALESCE(msi_start_month, purchase_date), MONTH),
-              INTERVAL msi_months - 1 MONTH
-            ),
-            INTERVAL 1 MONTH
+        AND active = TRUE
+    ),
+    rule_windows AS (
+      SELECT
+        sm.statement_month,
+        r.card_name,
+        DATE_ADD(sm.statement_month, INTERVAL r.billing_shift_months MONTH) AS end_month_start,
+        DATE_SUB(
+          DATE_ADD(sm.statement_month, INTERVAL r.billing_shift_months MONTH),
+          INTERVAL 1 MONTH
+        ) AS start_month_start,
+        r.cut_day
+      FROM statement_months sm
+      CROSS JOIN rules r
+    ),
+    bounds AS (
+      SELECT
+        statement_month,
+        card_name,
+        DATE(
+          EXTRACT(YEAR FROM start_month_start),
+          EXTRACT(MONTH FROM start_month_start),
+          LEAST(
+            cut_day,
+            EXTRACT(DAY FROM DATE_SUB(DATE_ADD(start_month_start, INTERVAL 1 MONTH), INTERVAL 1 DAY))
           )
-        ) AS billing_month
-        WHERE chat_id = @chat_id
-          AND is_msi = TRUE
-          AND msi_months IS NOT NULL
-          AND msi_months > 0
-      )
-      SELECT card_name, billing_month, SUM(amount) AS total
-      FROM (
-        SELECT * FROM non_msi
-        UNION ALL
-        SELECT * FROM msi_expanded
-      )
-      WHERE billing_month BETWEEN DATE(@from_date) AND DATE(@to_date)
-      GROUP BY card_name, billing_month
-    `;
+        ) AS start_date,
+        DATE(
+          EXTRACT(YEAR FROM end_month_start),
+          EXTRACT(MONTH FROM end_month_start),
+          LEAST(
+            cut_day,
+            EXTRACT(DAY FROM DATE_SUB(DATE_ADD(end_month_start, INTERVAL 1 MONTH), INTERVAL 1 DAY))
+          )
+        ) AS end_date
+      FROM rule_windows
+    ),
+    expenses_in_window AS (
+      SELECT
+        b.card_name,
+        b.statement_month,
+        e.amount_mxn,
+        IFNULL(e.is_msi, FALSE) AS is_msi,
+        e.msi_months,
+        e.msi_total_amount,
+        e.msi_start_month,
+        e.purchase_date
+      FROM bounds b
+      JOIN ${expensesTable} e
+        ON e.chat_id = @chat_id
+       AND e.payment_method = b.card_name
+       AND e.purchase_date BETWEEN b.start_date AND b.end_date
+      WHERE (@exclude_msi = FALSE OR IFNULL(e.is_msi, FALSE) = FALSE)
+    ),
+    expanded AS (
+      SELECT
+        card_name,
+        statement_month,
+        CASE
+          WHEN is_msi = TRUE AND msi_months IS NOT NULL AND msi_months > 0
+            THEN SAFE_DIVIDE(COALESCE(msi_total_amount, amount_mxn), msi_months)
+          ELSE amount_mxn
+        END AS amount,
+        billing_month,
+        is_msi,
+        msi_months
+      FROM expenses_in_window,
+      UNNEST(
+        CASE
+          WHEN is_msi = TRUE AND msi_months IS NOT NULL AND msi_months > 0 THEN
+            GENERATE_DATE_ARRAY(
+              DATE_TRUNC(COALESCE(msi_start_month, purchase_date), MONTH),
+              DATE_ADD(
+                DATE_TRUNC(COALESCE(msi_start_month, purchase_date), MONTH),
+                INTERVAL msi_months - 1 MONTH
+              ),
+              INTERVAL 1 MONTH
+            )
+          ELSE [statement_month]
+        END
+      ) AS billing_month
+    )
+    SELECT
+      card_name,
+      statement_month AS billing_month,
+      SUM(amount) AS total
+    FROM expanded
+    WHERE (
+      is_msi = FALSE
+      OR msi_months IS NULL
+      OR msi_months = 0
+      OR billing_month = statement_month
+    )
+    GROUP BY card_name, billing_month
+  `;
 
   const [rows] = await queryFn({
     query,
     params: {
       chat_id: String(chatId),
       from_date: fromISO,
-      to_date: toISO
+      to_date: toISO,
+      exclude_msi: excludeMsi
     }
   });
 
