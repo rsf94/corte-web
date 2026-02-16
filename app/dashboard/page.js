@@ -63,6 +63,7 @@ export default async function Dashboard({ searchParams }) {
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold">Pagos TDC por mes</h1>
         <p className="text-slate-600">Vista read-only de cashflow mensual por tarjeta.</p>
+        <a className="text-sm font-medium text-blue-700 hover:underline" href="/dashboard/expenses">Ir a Expenses Explorer</a>
       </div>
 
       {linkHandling.error ? (
