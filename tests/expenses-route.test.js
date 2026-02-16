@@ -16,6 +16,12 @@ function withEnv(overrides) {
   };
 }
 
+function identityResolverQuery(query, { chatId = "", userId = "user-1" } = {}) {
+  if (query.includes(".users")) return [[{ user_id: userId }]];
+  if (query.includes(".chat_links")) return [chatId ? [{ chat_id: chatId }] : []];
+  return null;
+}
+
 test("expenses route returns 401 when there is no authenticated session", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
 
@@ -47,8 +53,9 @@ test("expenses route returns 403 when session exists but has no LINKED chat", as
     const response = await handleExpensesGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query }) => {
-        assert.match(query, /user_links/);
-        return [[]];
+        const resolved = identityResolverQuery(query, { chatId: "" });
+        if (resolved) return resolved;
+        throw new Error(`Unexpected query: ${query}`);
       }
     });
 
@@ -80,9 +87,8 @@ test("expenses route applies filters and seek pagination without OFFSET", async 
     const response = await handleExpensesGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query, params }) => {
-        if (query.includes("user_links")) {
-          return [[{ chat_id: "chat-linked" }]];
-        }
+        const resolved = identityResolverQuery(query, { chatId: "chat-linked" });
+        if (resolved) return resolved;
 
         expensesQuery = query;
         expensesParams = params;

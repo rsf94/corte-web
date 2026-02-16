@@ -6,6 +6,8 @@ Variables de entorno (mismas credenciales que el bot, sin exponer en frontend):
 
 - `BQ_PROJECT_ID`
 - `BQ_DATASET`
+- `BQ_IDENTITY_USERS_TABLE` (opcional, default: `users`)
+- `BQ_IDENTITY_CHAT_LINKS_TABLE` (opcional, default: `chat_links`)
 - `BQ_TABLE`
 - `LINK_TOKEN_SECRET` (secreto para firmar tokens de vinculación con Telegram)
 - `DASHBOARD_TOKEN` (token de acceso read-only para el API del dashboard)
@@ -17,31 +19,20 @@ Variables de entorno (mismas credenciales que el bot, sin exponer en frontend):
 
 > Nota: El build no debe requerir credenciales de auth. Las variables de NextAuth se evalúan en runtime.
 
-### Tabla `user_links` (BigQuery)
+### Tablas de identidad y vinculación (BigQuery)
 
-Dataset: `BQ_DATASET`. Crear la tabla `user_links` con el siguiente esquema:
+Ahora el dashboard resuelve identidad en dos pasos:
 
-| Columna | Tipo | Descripción |
-| --- | --- | --- |
-| `email` | STRING | Email de Google |
-| `chat_id` | STRING | Chat ID de Telegram |
-| `status` | STRING | `ACTIVE` / `REVOKED` |
-| `linked_at` | TIMESTAMP | Fecha de vinculación |
-| `last_seen_at` | TIMESTAMP | Último uso (opcional) |
+1. `users`: email (normalizado a minúsculas) -> `user_id`.
+2. `chat_links`: `user_id` -> `chat_id` (estado `LINKED`).
 
-Ejemplo de DDL:
+La tabla `user_links` se mantiene como auditoría append-only para el flujo de `link_token` del bot, pero **ya no es la fuente de verdad para autorización**.
 
-```sql
-CREATE TABLE `${BQ_PROJECT_ID}.${BQ_DATASET}.user_links` (
-  email STRING,
-  chat_id STRING,
-  status STRING,
-  linked_at TIMESTAMP,
-  last_seen_at TIMESTAMP
-);
-```
+Ejecuta la migración:
 
-> Nota: Las consultas del dashboard sólo leen filas con `status = "ACTIVE"`.
+- `docs/migrations/20260216_identity_users_chat_links.sql`
+
+Si estas tablas no existen, el backend regresará un error claro indicando que faltan `users/chat_links`.
 
 ## Correr local
 
@@ -73,7 +64,8 @@ http://localhost:3000/dashboard?token=TU_TOKEN&chat_id=TU_CHAT_ID&from=2024-01-0
 1. En Telegram, envía el comando `/dashboard` al bot.
 2. Abre el enlace que responde (incluye `code=...`).
 3. Inicia sesión con Google si es necesario.
-4. Una vez vinculado podrás abrir `/dashboard` sin `chat_id` en la URL.
+4. Una vez vinculado, corte-web crea/usa tu `user_id` y registra un `chat_links` append-only.
+5. Después podrás abrir `/dashboard` sin `chat_id` en la URL.
 
 ## Deploy
 
@@ -98,7 +90,7 @@ Variables requeridas en runtime (Cloud Run):
 - `NEXTAUTH_SECRET`
 - `NEXTAUTH_URL`
 - `LINK_TOKEN_SECRET`
-- `BQ_DATASET` (asegúrate de tener la tabla `user_links`)
+- `BQ_DATASET` (asegúrate de aplicar la migración de `users` + `chat_links`)
 
 ## Variables para el bot (telegram-gastos-bot)
 
