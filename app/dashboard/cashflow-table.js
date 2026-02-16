@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { buildStackedChartData, getCardNames, getDefaultRange } from "../../lib/dashboard_cashflow.js";
+import { startOfMonthISO } from "../../lib/date_utils.js";
 
 const CARD_COLORS = ["#1d4ed8", "#9333ea", "#0f766e", "#ea580c", "#be123c", "#334155"];
+const CARD_COLUMN_WIDTH = 220;
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("es-MX", {
@@ -22,6 +24,32 @@ function inputMonthToISO(inputMonth) {
   return `${inputMonth}-01`;
 }
 
+function monthLabelToStartISO(monthLabel) {
+  return startOfMonthISO(`${monthLabel}-01`);
+}
+
+function CustomBarTooltip({ month, point, cardNames }) {
+  if (!point) return null;
+
+  const breakdown = cardNames
+    .map((cardName) => ({ cardName, value: point[cardName] ?? 0 }))
+    .filter((entry) => entry.value > 0);
+
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-2 z-10 w-56 -translate-x-1/2 rounded border border-slate-200 bg-white/95 p-3 text-left text-xs shadow-lg">
+      <p className="font-semibold text-slate-800">{month}</p>
+      <p className="mt-1 text-slate-700">Total: {formatCurrency(point.total ?? 0)}</p>
+      <div className="mt-2 space-y-1">
+        {breakdown.map((entry) => (
+          <p key={`${month}-${entry.cardName}`} className="text-slate-600">
+            {entry.cardName}: {formatCurrency(entry.value)}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function CashflowTable({ initialData, initialFromISO = "", initialToISO = "" }) {
   const defaults = useMemo(() => getDefaultRange(), []);
   const [fromISO, setFromISO] = useState(initialFromISO || defaults.from);
@@ -31,6 +59,7 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
   const [data, setData] = useState(initialData);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [hoveredMonth, setHoveredMonth] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,6 +107,11 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
   const cardNames = getCardNames(data);
   const chartData = buildStackedChartData(data, monthColumns);
   const maxTotal = Math.max(...chartData.map((point) => point.total), 1);
+  const currentMonthStart = useMemo(() => startOfMonthISO(new Date().toISOString().slice(0, 10)), []);
+  const pastMonths = useMemo(
+    () => new Set(monthColumns.filter((month) => monthLabelToStartISO(month) < currentMonthStart)),
+    [currentMonthStart, monthColumns]
+  );
 
   return (
     <div className="mt-6">
@@ -124,27 +158,38 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
             <table className="min-w-full text-sm">
               <thead className="bg-slate-100 text-left">
                 <tr>
-                  <th className="px-4 py-3">Tarjeta</th>
+                  <th className="w-[220px] min-w-[220px] px-4 py-3">Tarjeta</th>
                   {monthColumns.map((month) => (
-                    <th key={month} className="px-4 py-3 text-right">{month}</th>
+                    <th
+                      key={month}
+                      className={`px-4 py-3 text-right ${pastMonths.has(month) ? "bg-slate-50" : ""}`}
+                    >
+                      {month}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {data.rows.map((row) => (
                   <tr key={row.card_name} className="border-t border-slate-100">
-                    <td className="px-4 py-3 font-medium">{row.card_name}</td>
+                    <td className="w-[220px] min-w-[220px] px-4 py-3 font-medium">{row.card_name}</td>
                     {monthColumns.map((month) => (
-                      <td key={month} className="px-4 py-3 text-right tabular-nums">
+                      <td
+                        key={month}
+                        className={`px-4 py-3 text-right tabular-nums ${pastMonths.has(month) ? "bg-slate-50" : ""}`}
+                      >
                         {formatCurrency(row.totals[month] ?? 0)}
                       </td>
                     ))}
                   </tr>
                 ))}
                 <tr className="border-t border-slate-200 bg-slate-50 font-semibold">
-                  <td className="px-4 py-3">TOTAL</td>
+                  <td className="w-[220px] min-w-[220px] px-4 py-3">TOTAL</td>
                   {monthColumns.map((month) => (
-                    <td key={month} className="px-4 py-3 text-right tabular-nums">
+                    <td
+                      key={month}
+                      className={`px-4 py-3 text-right tabular-nums ${pastMonths.has(month) ? "bg-slate-100" : ""}`}
+                    >
                       {formatCurrency(data.totals[month] ?? 0)}
                     </td>
                   ))}
@@ -155,35 +200,51 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
 
           <div className="mt-6 rounded border border-slate-200 bg-white p-4 shadow-sm" data-testid="cashflow-chart">
             <h2 className="mb-3 text-sm font-semibold text-slate-700">Gráfica por mes</h2>
-            <div className="flex gap-6 overflow-x-auto pb-2">
-              {chartData.map((point) => {
-                const columnHeight = (point.total / maxTotal) * 220;
-                return (
-                  <div key={point.month} className="min-w-[96px] text-center">
-                    <p className="mb-2 text-xs font-semibold text-slate-700">{formatCurrency(point.total)}</p>
-                    <div className="mx-auto flex h-[220px] w-10 flex-col justify-end overflow-hidden rounded bg-slate-100">
-                      <div className="flex flex-col" style={{ height: `${columnHeight}px` }}>
-                        {cardNames.map((cardName, index) => {
-                          const value = point[cardName] ?? 0;
-                          if (!value || point.total <= 0) return null;
-                          const segmentHeight = (value / point.total) * columnHeight;
-                          return (
-                            <div
-                              key={`${point.month}-${cardName}`}
-                              title={`${cardName}: ${formatCurrency(value)}`}
-                              style={{
-                                height: `${segmentHeight}px`,
-                                backgroundColor: CARD_COLORS[index % CARD_COLORS.length]
-                              }}
-                            />
-                          );
-                        })}
+            <div className="overflow-x-auto pb-2">
+              <div
+                className="grid min-w-[max-content]"
+                style={{ gridTemplateColumns: `${CARD_COLUMN_WIDTH}px minmax(0, 1fr)` }}
+              >
+                <div aria-hidden="true" />
+                <div
+                  className="grid gap-4 px-4"
+                  style={{
+                    gridTemplateColumns: `repeat(${Math.max(monthColumns.length, 1)}, minmax(96px, 1fr))`
+                  }}
+                >
+                  {chartData.map((point) => {
+                    const columnHeight = (point.total / maxTotal) * 220;
+                    const isHovered = hoveredMonth === point.month;
+                    return (
+                      <div key={point.month} className="relative text-center">
+                        {isHovered ? <CustomBarTooltip month={point.month} point={point} cardNames={cardNames} /> : null}
+                        <p className="mb-2 text-xs font-semibold text-slate-700">{formatCurrency(point.total)}</p>
+                        <div className="mx-auto flex h-[220px] w-10 flex-col justify-end overflow-hidden rounded bg-slate-100">
+                          <div className="flex flex-col" style={{ height: `${columnHeight}px` }}>
+                            {cardNames.map((cardName, index) => {
+                              const value = point[cardName] ?? 0;
+                              if (!value || point.total <= 0) return null;
+                              const segmentHeight = (value / point.total) * columnHeight;
+                              return (
+                                <div
+                                  key={`${point.month}-${cardName}`}
+                                  onMouseEnter={() => setHoveredMonth(point.month)}
+                                  onMouseLeave={() => setHoveredMonth("")}
+                                  style={{
+                                    height: `${segmentHeight}px`,
+                                    backgroundColor: CARD_COLORS[index % CARD_COLORS.length]
+                                  }}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">{point.month}</p>
                       </div>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-500">{point.month}</p>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-3 text-xs">
               {cardNames.map((cardName, index) => (

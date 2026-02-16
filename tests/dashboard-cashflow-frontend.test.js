@@ -24,6 +24,7 @@ test("dashboard table component renders stacked bar chart section", async () => 
 
   assert.match(source, /data-testid="cashflow-chart"/);
   assert.match(source, /columnHeight/);
+  assert.match(source, /function CustomBarTooltip/);
 
   const chartData = buildStackedChartData(
     {
@@ -51,4 +52,13 @@ test("dashboard table component renders stacked bar chart section", async () => 
       Santander: 75
     }
   ]);
+});
+
+test("dashboard table aligns chart layout with month columns and shades past months", async () => {
+  const source = await fs.readFile(new URL("../app/dashboard/cashflow-table.js", import.meta.url), "utf8");
+
+  assert.match(source, /CARD_COLUMN_WIDTH = 220/);
+  assert.match(source, /gridTemplateColumns: `\$\{CARD_COLUMN_WIDTH\}px minmax\(0, 1fr\)`/);
+  assert.match(source, /pastMonths\.has\(month\) \? "bg-slate-50" : ""/);
+  assert.match(source, /monthLabelToStartISO/);
 });
