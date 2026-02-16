@@ -30,14 +30,7 @@ function buildMonths(fromISO, toISO) {
   return getMonthRange(fromISO, toISO);
 }
 
-function parseExcludeMsiParam(value) {
-  return String(value || "false").toLowerCase() === "true";
-}
-
-async function fetchExpenseAggregates(
-  { chatId, fromISO, toISO, excludeMsi },
-  queryFn = defaultQueryFn
-) {
+async function fetchExpenseAggregates({ chatId, fromISO, toISO }, queryFn = defaultQueryFn) {
   const dataset = requiredEnv("BQ_DATASET");
   const projectId = requiredEnv("BQ_PROJECT_ID");
   const expensesTable = `\`${projectId}.${dataset}.${requiredEnv("BQ_TABLE")}\``;
@@ -90,64 +83,18 @@ async function fetchExpenseAggregates(
           )
         ) AS end_date
       FROM rule_windows
-    ),
-    expenses_in_window AS (
-      SELECT
-        b.card_name,
-        b.statement_month,
-        e.amount_mxn,
-        IFNULL(e.is_msi, FALSE) AS is_msi,
-        e.msi_months,
-        e.msi_total_amount,
-        e.msi_start_month,
-        e.purchase_date
-      FROM bounds b
-      JOIN ${expensesTable} e
-        ON e.chat_id = @chat_id
-       AND e.payment_method = b.card_name
-       AND e.purchase_date BETWEEN b.start_date AND b.end_date
-      WHERE (@exclude_msi = FALSE OR IFNULL(e.is_msi, FALSE) = FALSE)
-    ),
-    expanded AS (
-      SELECT
-        card_name,
-        statement_month,
-        CASE
-          WHEN is_msi = TRUE AND msi_months IS NOT NULL AND msi_months > 0
-            THEN SAFE_DIVIDE(COALESCE(msi_total_amount, amount_mxn), msi_months)
-          ELSE amount_mxn
-        END AS amount,
-        billing_month,
-        is_msi,
-        msi_months
-      FROM expenses_in_window,
-      UNNEST(
-        CASE
-          WHEN is_msi = TRUE AND msi_months IS NOT NULL AND msi_months > 0 THEN
-            GENERATE_DATE_ARRAY(
-              DATE_TRUNC(COALESCE(msi_start_month, purchase_date), MONTH),
-              DATE_ADD(
-                DATE_TRUNC(COALESCE(msi_start_month, purchase_date), MONTH),
-                INTERVAL msi_months - 1 MONTH
-              ),
-              INTERVAL 1 MONTH
-            )
-          ELSE [statement_month]
-        END
-      ) AS billing_month
     )
     SELECT
-      card_name,
-      statement_month AS billing_month,
-      SUM(amount) AS total
-    FROM expanded
-    WHERE (
-      is_msi = FALSE
-      OR msi_months IS NULL
-      OR msi_months = 0
-      OR billing_month = statement_month
-    )
-    GROUP BY card_name, billing_month
+      b.card_name,
+      b.statement_month AS billing_month,
+      SUM(e.amount_mxn) AS total
+    FROM bounds b
+    JOIN ${expensesTable} e
+      ON e.chat_id = @chat_id
+     AND e.payment_method = b.card_name
+     AND e.purchase_date BETWEEN b.start_date AND b.end_date
+    WHERE e.is_msi IS FALSE OR e.is_msi IS NULL
+    GROUP BY b.card_name, billing_month
   `;
 
   const [rows] = await queryFn({
@@ -155,8 +102,7 @@ async function fetchExpenseAggregates(
     params: {
       chat_id: String(chatId),
       from_date: fromISO,
-      to_date: toISO,
-      exclude_msi: excludeMsi
+      to_date: toISO
     }
   });
 
@@ -206,7 +152,6 @@ export async function handleCashflowGet(
     const allowedEmails = getAllowedEmails();
     const from = searchParams.get("from");
     const to = searchParams.get("to");
-    const excludeMsi = parseExcludeMsiParam(searchParams.get("exclude_msi"));
 
     if (!allowedEmails.length) {
       logAccessDenied({
@@ -249,7 +194,7 @@ export async function handleCashflowGet(
     }
 
     const months = buildMonths(fromISO, toISO);
-    const aggregates = await fetchExpenseAggregates({ chatId, fromISO, toISO, excludeMsi }, queryFn);
+    const aggregates = await fetchExpenseAggregates({ chatId, fromISO, toISO }, queryFn);
 
     const rowsByCard = new Map();
     aggregates.forEach((row) => {

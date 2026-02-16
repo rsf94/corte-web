@@ -120,7 +120,7 @@ test("cashflow route uses LINKED chat_id from user_links for BigQuery cashflow q
   }
 });
 
-test("cashflow route excludes MSI rows when exclude_msi=true", async () => {
+test("cashflow route always excludes MSI rows", async () => {
   const restore = withEnv({
     ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
@@ -133,7 +133,7 @@ test("cashflow route excludes MSI rows when exclude_msi=true", async () => {
   try {
     const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
     const req = new Request(
-      "http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-02-01&exclude_msi=true"
+      "http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-02-01&exclude_msi=false"
     );
 
     const response = await handleCashflowGet(req, {
@@ -149,10 +149,7 @@ test("cashflow route excludes MSI rows when exclude_msi=true", async () => {
     });
 
     assert.equal(response.status, 200);
-    assert.match(aggregateQuery, /FROM `project\.dataset\.card_rules`/);
-    assert.match(aggregateQuery, /GENERATE_DATE_ARRAY\(DATE\(@from_date\), DATE\(@to_date\), INTERVAL 1 MONTH\)/);
-    assert.match(aggregateQuery, /e\.purchase_date BETWEEN b\.start_date AND b\.end_date/);
-    assert.match(aggregateQuery, /IFNULL\(e\.is_msi, FALSE\) = FALSE/);
+    assert.match(aggregateQuery, /WHERE e\.is_msi IS FALSE OR e\.is_msi IS NULL/);
 
     const body = await response.json();
     assert.equal(body.rows[0].totals["2024-01"], 100);
@@ -192,9 +189,10 @@ test("cashflow route builds statement month windows with card rules", async () =
     });
 
     assert.equal(response.status, 200);
-    assert.match(aggregateQuery, /GENERATE_DATE_ARRAY/);
-    assert.match(aggregateQuery, /COALESCE\(msi_total_amount, amount_mxn\)/);
-    assert.match(aggregateQuery, /msi_months > 0/);
+    assert.match(aggregateQuery, /FROM `project\.dataset\.card_rules`/);
+    assert.match(aggregateQuery, /GENERATE_DATE_ARRAY\(DATE\(@from_date\), DATE\(@to_date\), INTERVAL 1 MONTH\)/);
+    assert.match(aggregateQuery, /DATE_ADD\(sm\.statement_month, INTERVAL r\.billing_shift_months MONTH\)/);
+    assert.match(aggregateQuery, /e\.purchase_date BETWEEN b\.start_date AND b\.end_date/);
 
     const body = await response.json();
     assert.equal(body.rows[0].totals["2024-01"], 100);
