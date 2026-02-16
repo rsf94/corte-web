@@ -76,7 +76,7 @@ export default function ExpensesExplorer() {
   }, []);
 
   return (
-    <section className="mt-6 space-y-4" data-testid="expenses-explorer">
+    <section className="space-y-6" data-testid="expenses-explorer">
       <ExpensesFilters
         draft={draft}
         paymentMethods={paymentMethods}
@@ -93,7 +93,10 @@ export default function ExpensesExplorer() {
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
 
       {hasFetched && !items.length && !isLoading ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">No hay gastos para mostrar.</div>
+        <div className="flex flex-col items-center justify-center gap-2 rounded border border-slate-200 bg-slate-50 px-6 py-10 text-center text-sm text-slate-600">
+          <span aria-hidden="true" className="text-xl">◌</span>
+          <p>No se encontraron gastos con los filtros seleccionados.</p>
+        </div>
       ) : null}
 
       {items.length ? <ExpensesTable items={items} /> : null}

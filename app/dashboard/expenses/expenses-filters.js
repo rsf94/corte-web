@@ -8,7 +8,7 @@ export default function ExpensesFilters({
 }) {
   return (
     <form
-      className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-2 xl:grid-cols-6"
+      className="grid grid-cols-1 gap-4 rounded border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2 xl:grid-cols-6"
       onSubmit={(event) => {
         event.preventDefault();
         onApply();
@@ -92,7 +92,7 @@ export default function ExpensesFilters({
 
       <div className="md:col-span-2 xl:col-span-6">
         <button
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           type="submit"
           disabled={isLoading}
         >

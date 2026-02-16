@@ -69,9 +69,7 @@ export default async function Dashboard({ searchParams }) {
       </div>
 
       {linkHandling.error ? (
-        <div className="mt-6 rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {linkHandling.error}
-        </div>
+        <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">{linkHandling.error}</div>
       ) : null}
 
       <div className="mt-6 rounded border border-slate-200 bg-white p-4 shadow-sm">
