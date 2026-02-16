@@ -104,7 +104,7 @@ export default function ExpensesExplorer() {
       {nextCursor ? (
         <div>
           <button
-            className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors duration-200 hover:bg-slate-100 disabled:opacity-60"
+            className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
             type="button"
             onClick={() => runFetch({ append: true, cursor: nextCursor, filters: activeFilters })}
             disabled={isLoading}

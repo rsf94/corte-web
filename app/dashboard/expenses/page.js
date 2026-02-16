@@ -19,10 +19,10 @@ export default async function ExpensesPage() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl space-y-8 px-6 py-8">
+    <main className="mx-auto max-w-6xl px-6 py-6">
       <div className="rounded border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold">Gastos</h1>
+          <h1 className="text-2xl font-semibold">Gastos</h1>
           <p className="text-slate-600">Consulta tus gastos con filtros y paginación.</p>
         </div>
       </div>
