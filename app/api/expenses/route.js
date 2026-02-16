@@ -1,6 +1,7 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { resolveLatestLinkedChatIdByEmail } from "../../../lib/identity_links.js";
 
 export const dynamic = "force-dynamic";
 
@@ -60,25 +61,6 @@ export function decodeCursor(cursor) {
   } catch {
     return null;
   }
-}
-
-async function fetchLinkedChatIdByEmail(email, queryFn = defaultQueryFn) {
-  const dataset = requiredEnv("BQ_DATASET");
-  const query = `
-    SELECT chat_id
-    FROM \`${requiredEnv("BQ_PROJECT_ID")}.${dataset}.user_links\`
-    WHERE email = @email AND status = "LINKED"
-    ORDER BY linked_at DESC
-    LIMIT 1
-  `;
-
-  const [rows] = await queryFn({
-    query,
-    params: { email: String(email) }
-  });
-
-  if (!rows.length) return "";
-  return String(rows[0].chat_id || "");
 }
 
 function normalizeRow(row) {
@@ -217,7 +199,7 @@ export async function handleExpensesGet(
     }
 
     const email = session.user?.email ?? "";
-    const chatId = await fetchLinkedChatIdByEmail(email, queryFn);
+    const chatId = await resolveLatestLinkedChatIdByEmail(email, { queryFn });
     if (!chatId) {
       return Response.json({ error: "Cuenta no vinculada" }, { status: 403 });
     }

@@ -1,11 +1,16 @@
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../lib/auth.js";
+import { ensureUserExistsByEmail } from "../../lib/identity_links.js";
 import DashboardNav from "./dashboard-nav.js";
 import DashboardSignOutButton from "./dashboard-sign-out-button.js";
 
 export default async function DashboardLayout({ children }) {
   const session = await getServerSession(getAuthOptions());
   const sessionEmail = session?.user?.email ?? "";
+
+  if (sessionEmail) {
+    await ensureUserExistsByEmail(sessionEmail);
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">

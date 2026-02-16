@@ -34,6 +34,7 @@ test("token expirado/no existe falla al verificar", async () => {
     secret: "secret",
     queryFn: async ({ query }) => {
       queries.push(query);
+      if (query.includes(".users")) return [[{ user_id: "u-1" }]];
       return [[]];
     }
   });
@@ -43,7 +44,7 @@ test("token expirado/no existe falla al verificar", async () => {
   assert.equal(queries.length, 3);
 });
 
-test("token válido inserta LINKED sin UPDATE", async () => {
+test("token válido inserta LINKED + chat_links sin UPDATE", async () => {
   const token = buildToken("xyz789");
   const queries = [];
   const result = await consumeLinkTokenAppendOnly(token, "ok@b.com", "google", {
@@ -53,6 +54,9 @@ test("token válido inserta LINKED sin UPDATE", async () => {
       if (query.includes("SELECT chat_id")) {
         return [[{ chat_id: "123" }]];
       }
+      if (query.includes("FROM `p.d.users`")) {
+        return [[{ user_id: "user-abc" }]];
+      }
       return [[]];
     }
   });
@@ -61,6 +65,8 @@ test("token válido inserta LINKED sin UPDATE", async () => {
   assert.equal(result.chatId, "123");
   assert.match(queries[1], /INSERT INTO/);
   assert.doesNotMatch(queries[1], /UPDATE\s+/);
+  assert.ok(queries.some((query) => query.includes("chat_links")));
+  assert.ok(queries.every((query) => !/\bUPDATE\b/i.test(query)));
 });
 
 test("token reusado (ya LINKED) falla", async () => {

@@ -28,6 +28,12 @@ function withEnv(overrides) {
   };
 }
 
+function identityResolverQuery(query, { chatId = "", userId = "user-1" } = {}) {
+  if (query.includes(".users")) return [[{ user_id: userId }]];
+  if (query.includes(".chat_links")) return [chatId ? [{ chat_id: chatId }] : []];
+  return null;
+}
+
 test("cashflow route returns 401 when there is no authenticated session", async () => {
   const restore = withEnv({
     ALLOWED_EMAILS: "user@example.com",
@@ -69,8 +75,9 @@ test("cashflow route returns 403 when session exists but has no LINKED chat", as
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query }) => {
-        assert.match(query, /user_links/);
-        return [[]];
+        const resolved = identityResolverQuery(query, { chatId: "" });
+        if (resolved) return resolved;
+        throw new Error(`Unexpected query: ${query}`);
       }
     });
 
@@ -81,7 +88,7 @@ test("cashflow route returns 403 when session exists but has no LINKED chat", as
   }
 });
 
-test("cashflow route uses LINKED chat_id from user_links for BigQuery cashflow queries", async () => {
+test("cashflow route uses LINKED chat_id from chat_links for BigQuery cashflow queries", async () => {
   const restore = withEnv({
     ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
@@ -101,9 +108,8 @@ test("cashflow route uses LINKED chat_id from user_links for BigQuery cashflow q
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query, params }) => {
-        if (query.includes("user_links")) {
-          return [[{ chat_id: linkedChatId }]];
-        }
+        const resolved = identityResolverQuery(query, { chatId: linkedChatId });
+        if (resolved) return resolved;
 
         if (Object.prototype.hasOwnProperty.call(params ?? {}, "chat_id")) {
           chatIdsUsed.push(params.chat_id);
@@ -139,9 +145,8 @@ test("cashflow route always excludes MSI rows", async () => {
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query }) => {
-        if (query.includes("user_links")) {
-          return [[{ chat_id: "linked-chat-123" }]];
-        }
+        const resolved = identityResolverQuery(query, { chatId: "linked-chat-123" });
+        if (resolved) return resolved;
 
         aggregateQuery = query;
         return [[{ card_name: "BBVA", billing_month: "2024-01-01", total: 100 }]];
@@ -175,9 +180,8 @@ test("cashflow route builds statement month windows with card rules", async () =
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query }) => {
-        if (query.includes("user_links")) {
-          return [[{ chat_id: "linked-chat-123" }]];
-        }
+        const resolved = identityResolverQuery(query, { chatId: "linked-chat-123" });
+        if (resolved) return resolved;
 
         aggregateQuery = query;
         return [[

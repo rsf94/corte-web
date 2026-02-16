@@ -1,6 +1,7 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { resolveLatestLinkedChatIdByEmail } from "../../../lib/identity_links.js";
 import { logAccessDenied } from "../../../lib/access_log.js";
 import { getAllowedEmails, isEmailAllowed } from "../../../lib/allowed_emails.js";
 import { getMonthRange, normalizeMonthStart } from "../../../lib/months.js";
@@ -118,26 +119,6 @@ function addToTotals(target, key, amount) {
   target[key] = current + amount;
 }
 
-async function fetchLinkedChatIdByEmail(email, queryFn = defaultQueryFn) {
-  const dataset = requiredEnv("BQ_DATASET");
-  const query = `
-    SELECT chat_id
-    FROM \`${requiredEnv("BQ_PROJECT_ID")}.${dataset}.user_links\`
-    WHERE email = @email AND status = "LINKED"
-    ORDER BY linked_at DESC
-    LIMIT 1
-  `;
-
-  const [rows] = await queryFn({
-    query,
-    params: { email: String(email) }
-  });
-  if (!rows.length) {
-    return "";
-  }
-  return String(rows[0].chat_id || "");
-}
-
 export async function handleCashflowGet(
   request,
   {
@@ -181,7 +162,7 @@ export async function handleCashflowGet(
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const chatId = await fetchLinkedChatIdByEmail(email, queryFn);
+    const chatId = await resolveLatestLinkedChatIdByEmail(email, { queryFn });
     if (!chatId) {
       return Response.json({ error: "Cuenta no vinculada" }, { status: 403 });
     }
