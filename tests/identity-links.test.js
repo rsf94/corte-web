@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ensureUserExistsByEmail, resolveLatestLinkedChatIdByEmail } from "../lib/identity_links.js";
+import { ensureUserExistsByEmail, insertChatLink, resolveLatestLinkedChatIdByEmail } from "../lib/identity_links.js";
 
 const envKeys = ["BQ_PROJECT_ID", "BQ_DATASET"];
 
@@ -57,6 +57,57 @@ test("ensure user exists inserts row when missing", async () => {
     assert.equal(queries.length, 2);
     assert.match(queries[0], /SELECT user_id/);
     assert.match(queries[1], /INSERT INTO `project\.dataset\.users`/);
+  } finally {
+    restore();
+  }
+});
+
+test("identity inserts avoid null BigQuery params for metadata", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  const queryOptions = [];
+
+  try {
+    await ensureUserExistsByEmail("new@example.com", {
+      userIdFactory: () => "new-user-id",
+      queryFn: async (options) => {
+        queryOptions.push(options);
+        if (options.query.includes("SELECT user_id")) return [[]];
+        return [[]];
+      }
+    });
+
+    await insertChatLink(
+      {
+        chatId: "chat-11",
+        userId: "new-user-id",
+        metadata: null
+      },
+      {
+        queryFn: async (options) => {
+          queryOptions.push(options);
+          return [[]];
+        }
+      }
+    );
+
+    const userInsert = queryOptions.find((options) =>
+      options.query.includes("INSERT INTO `project.dataset.users`")
+    );
+    assert.ok(userInsert, "expected users insert query");
+    assert.match(userInsert.query, /CAST\(NULL AS JSON\)/);
+    assert.equal("metadata" in userInsert.params, false);
+
+    const chatInsert = queryOptions.find((options) =>
+      options.query.includes("INSERT INTO `project.dataset.chat_links`")
+    );
+    assert.ok(chatInsert, "expected chat_links insert query");
+    assert.match(chatInsert.query, /CAST\(NULL AS JSON\)/);
+    assert.equal("metadata" in chatInsert.params, false);
+
+    const nullParamQuery = queryOptions.find((options) =>
+      Object.values(options.params || {}).some((value) => value === null)
+    );
+    assert.equal(nullParamQuery, undefined);
   } finally {
     restore();
   }
