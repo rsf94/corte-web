@@ -80,6 +80,8 @@ export default function CashflowTable({
 
   if (!data) return null;
 
+  const monthColumns = data.months ?? months;
+
   return (
     <div className="mt-6">
       <label className="mb-3 inline-flex items-center gap-2 text-sm text-slate-700">
@@ -99,7 +101,7 @@ export default function CashflowTable({
           <thead className="bg-slate-100 text-left">
             <tr>
               <th className="px-4 py-3">Tarjeta</th>
-              {months.map((month) => (
+              {monthColumns.map((month) => (
                 <th key={month} className="px-4 py-3 text-right">
                   {month}
                 </th>
@@ -110,7 +112,7 @@ export default function CashflowTable({
             {data.rows.map((row) => (
               <tr key={row.card_name} className="border-t border-slate-100">
                 <td className="px-4 py-3 font-medium">{row.card_name}</td>
-                {months.map((month) => (
+                {monthColumns.map((month) => (
                   <td key={month} className="px-4 py-3 text-right tabular-nums">
                     {formatCurrency(row.totals[month] ?? 0)}
                   </td>
@@ -119,7 +121,7 @@ export default function CashflowTable({
             ))}
             <tr className="border-t border-slate-200 bg-slate-50 font-semibold">
               <td className="px-4 py-3">TOTAL</td>
-              {months.map((month) => (
+              {monthColumns.map((month) => (
                 <td key={month} className="px-4 py-3 text-right tabular-nums">
                   {formatCurrency(data.totals[month] ?? 0)}
                 </td>

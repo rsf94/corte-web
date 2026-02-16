@@ -149,8 +149,10 @@ test("cashflow route excludes MSI rows when exclude_msi=true", async () => {
     });
 
     assert.equal(response.status, 200);
-    assert.match(aggregateQuery, /\(is_msi IS NULL OR is_msi = FALSE\)/);
-    assert.doesNotMatch(aggregateQuery, /GENERATE_DATE_ARRAY/);
+    assert.match(aggregateQuery, /FROM `project\.dataset\.card_rules`/);
+    assert.match(aggregateQuery, /GENERATE_DATE_ARRAY\(DATE\(@from_date\), DATE\(@to_date\), INTERVAL 1 MONTH\)/);
+    assert.match(aggregateQuery, /e\.purchase_date BETWEEN b\.start_date AND b\.end_date/);
+    assert.match(aggregateQuery, /IFNULL\(e\.is_msi, FALSE\) = FALSE/);
 
     const body = await response.json();
     assert.equal(body.rows[0].totals["2024-01"], 100);
@@ -159,7 +161,7 @@ test("cashflow route excludes MSI rows when exclude_msi=true", async () => {
   }
 });
 
-test("cashflow route prorates MSI rows when exclude_msi=false", async () => {
+test("cashflow route builds statement month windows with card rules", async () => {
   const restore = withEnv({
     ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
