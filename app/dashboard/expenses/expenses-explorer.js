@@ -56,7 +56,7 @@ export default function ExpensesExplorer() {
       }
 
       if (!res.ok) {
-        throw new Error(`Error ${res.status}`);
+        throw new Error(`Error ${res.status} al cargar gastos`);
       }
 
       const body = await res.json();
@@ -70,11 +70,11 @@ export default function ExpensesExplorer() {
     }
   }
 
-
   useEffect(() => {
     runFetch({ append: false, cursor: "", filters: activeFilters });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
   return (
     <section className="mt-6 space-y-4" data-testid="expenses-explorer">
       <ExpensesFilters
@@ -101,12 +101,12 @@ export default function ExpensesExplorer() {
       {nextCursor ? (
         <div>
           <button
-            className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
+            className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
             type="button"
             onClick={() => runFetch({ append: true, cursor: nextCursor, filters: activeFilters })}
             disabled={isLoading}
           >
-            Load More
+            Cargar más
           </button>
         </div>
       ) : null}

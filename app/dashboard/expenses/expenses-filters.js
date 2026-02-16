@@ -35,13 +35,13 @@ export default function ExpensesFilters({
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
-        Método de pago
+        Tarjeta
         <select
           className="rounded border border-slate-300 px-3 py-2"
           value={draft.payment_method}
           onChange={(event) => onDraftChange("payment_method", event.target.value)}
         >
-          <option value="">Todos</option>
+          <option value="">Todas</option>
           {paymentMethods.map((value) => (
             <option key={value} value={value}>
               {value}
@@ -75,7 +75,7 @@ export default function ExpensesFilters({
         >
           <option value="all">Todos</option>
           <option value="true">Solo MSI</option>
-          <option value="false">Solo no-MSI</option>
+          <option value="false">Solo no MSI</option>
         </select>
       </label>
 
@@ -84,7 +84,7 @@ export default function ExpensesFilters({
         <input
           className="rounded border border-slate-300 px-3 py-2"
           type="search"
-          placeholder="merchant, description o raw_text"
+          placeholder="comercio, descripción o texto original"
           value={draft.q}
           onChange={(event) => onDraftChange("q", event.target.value)}
         />
@@ -96,7 +96,7 @@ export default function ExpensesFilters({
           type="submit"
           disabled={isLoading}
         >
-          Apply Filters
+          Aplicar filtros
         </button>
       </div>
     </form>

@@ -33,12 +33,16 @@ test("expenses query params include filters and omit is_msi when set to all", ()
   assert.equal(params.get("limit"), "50");
 });
 
-test("expenses explorer renders filters table and pagination controls", async () => {
+test("expenses explorer renders filtros tabla y paginación", async () => {
   const source = await fs.readFile(new URL("../app/dashboard/expenses/expenses-explorer.js", import.meta.url), "utf8");
   const filtersSource = await fs.readFile(new URL("../app/dashboard/expenses/expenses-filters.js", import.meta.url), "utf8");
+  const tableSource = await fs.readFile(new URL("../app/dashboard/expenses/expenses-table.js", import.meta.url), "utf8");
 
   assert.match(source, /data-testid="expenses-explorer"/);
-  assert.match(filtersSource, /Apply Filters/);
-  assert.match(source, /Load More/);
+  assert.match(filtersSource, /Aplicar filtros/);
+  assert.match(filtersSource, /comercio, descripción o texto original/);
+  assert.match(source, /Cargar más/);
   assert.match(source, /ExpensesTable/);
+  assert.match(tableSource, /Fecha/);
+  assert.match(tableSource, /Meses MSI/);
 });

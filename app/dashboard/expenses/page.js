@@ -19,10 +19,12 @@ export default async function ExpensesPage() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold">Expenses Explorer</h1>
-        <p className="text-slate-600">Consulta read-only de gastos con filtros y paginación.</p>
+    <main className="mx-auto max-w-6xl px-6 py-6">
+      <div className="rounded border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-2xl font-semibold">Gastos</h1>
+          <p className="text-slate-600">Consulta tus gastos con filtros y paginación.</p>
+        </div>
       </div>
       <ExpensesExplorer />
     </main>
