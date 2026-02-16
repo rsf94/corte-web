@@ -56,7 +56,7 @@ export default function ExpensesExplorer() {
       }
 
       if (!res.ok) {
-        throw new Error(`Error ${res.status}`);
+        throw new Error(`Error ${res.status} al cargar gastos`);
       }
 
       const body = await res.json();
@@ -70,13 +70,13 @@ export default function ExpensesExplorer() {
     }
   }
 
-
   useEffect(() => {
     runFetch({ append: false, cursor: "", filters: activeFilters });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
   return (
-    <section className="mt-6 space-y-4" data-testid="expenses-explorer">
+    <section className="space-y-6" data-testid="expenses-explorer">
       <ExpensesFilters
         draft={draft}
         paymentMethods={paymentMethods}
@@ -93,7 +93,10 @@ export default function ExpensesExplorer() {
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
 
       {hasFetched && !items.length && !isLoading ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">No hay gastos para mostrar.</div>
+        <div className="flex flex-col items-center justify-center gap-2 rounded border border-slate-200 bg-slate-50 px-6 py-10 text-center text-sm text-slate-600">
+          <span aria-hidden="true" className="text-xl">◌</span>
+          <p>No se encontraron gastos con los filtros seleccionados.</p>
+        </div>
       ) : null}
 
       {items.length ? <ExpensesTable items={items} /> : null}
@@ -101,12 +104,12 @@ export default function ExpensesExplorer() {
       {nextCursor ? (
         <div>
           <button
-            className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
+            className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors duration-200 hover:bg-slate-100 disabled:opacity-60"
             type="button"
             onClick={() => runFetch({ append: true, cursor: nextCursor, filters: activeFilters })}
             disabled={isLoading}
           >
-            Load More
+            Cargar más
           </button>
         </div>
       ) : null}

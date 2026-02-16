@@ -114,9 +114,9 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
   );
 
   return (
-    <div className="mt-6">
+    <div className="space-y-8">
       <form
-        className="mb-4 flex flex-wrap items-end gap-4"
+        className="flex flex-wrap items-end gap-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!draftFrom || !draftTo) return;
@@ -144,13 +144,16 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
             onChange={(event) => setDraftTo(event.target.value)}
           />
         </label>
-        <button className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white" type="submit">
+        <button
+          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-slate-800"
+          type="submit"
+        >
           Aplicar
         </button>
       </form>
 
-      {isLoading ? <p className="mb-3 text-xs text-slate-500">Actualizando…</p> : null}
-      {error ? <p className="mb-3 text-xs text-red-600">{error}</p> : null}
+      {isLoading ? <p className="text-xs text-slate-500">Actualizando…</p> : null}
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
 
       {data ? (
         <>
@@ -171,12 +174,12 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
               </thead>
               <tbody>
                 {data.rows.map((row) => (
-                  <tr key={row.card_name} className="border-t border-slate-100">
-                    <td className="w-[220px] min-w-[220px] px-4 py-3 font-medium">{row.card_name}</td>
+                  <tr key={row.card_name} className="border-t border-slate-100 even:bg-slate-50/40 transition-colors duration-200 hover:bg-gray-50">
+                    <td className="w-[220px] min-w-[220px] px-4 py-3.5 font-medium">{row.card_name}</td>
                     {monthColumns.map((month) => (
                       <td
                         key={month}
-                        className={`px-4 py-3 text-right tabular-nums ${pastMonths.has(month) ? "bg-slate-50" : ""}`}
+                        className={`px-4 py-3.5 text-right tabular-nums ${pastMonths.has(month) ? "bg-slate-50" : ""}`}
                       >
                         {formatCurrency(row.totals[month] ?? 0)}
                       </td>
@@ -184,11 +187,11 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
                   </tr>
                 ))}
                 <tr className="border-t border-slate-200 bg-slate-50 font-semibold">
-                  <td className="w-[220px] min-w-[220px] px-4 py-3">TOTAL</td>
+                  <td className="w-[220px] min-w-[220px] px-4 py-3.5">TOTAL</td>
                   {monthColumns.map((month) => (
                     <td
                       key={month}
-                      className={`px-4 py-3 text-right tabular-nums ${pastMonths.has(month) ? "bg-slate-100" : ""}`}
+                      className={`px-4 py-3.5 text-right tabular-nums ${pastMonths.has(month) ? "bg-slate-100" : ""}`}
                     >
                       {formatCurrency(data.totals[month] ?? 0)}
                     </td>
@@ -198,8 +201,9 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
             </table>
           </div>
 
-          <div className="mt-6 rounded border border-slate-200 bg-white p-4 shadow-sm" data-testid="cashflow-chart">
-            <h2 className="mb-3 text-sm font-semibold text-slate-700">Gráfica por mes</h2>
+          <div className="rounded border border-slate-200 bg-white p-6 shadow-sm" data-testid="cashflow-chart">
+            <h2 className="mb-1 text-xl font-semibold text-slate-800">Gráfica por mes</h2>
+            <p className="mb-4 text-sm text-slate-600">Total mensual por tarjeta</p>
             <div className="overflow-x-auto pb-2">
               <div
                 className="grid min-w-[max-content]"
@@ -215,11 +219,13 @@ export default function CashflowTable({ initialData, initialFromISO = "", initia
                   {chartData.map((point) => {
                     const columnHeight = (point.total / maxTotal) * 220;
                     const isHovered = hoveredMonth === point.month;
+                    const chartColumnHeight = point.total > 0 ? 220 : 104;
+
                     return (
-                      <div key={point.month} className="relative text-center">
+                      <div key={point.month} className="relative text-center transition-all duration-200">
                         {isHovered ? <CustomBarTooltip month={point.month} point={point} cardNames={cardNames} /> : null}
                         <p className="mb-2 text-xs font-semibold text-slate-700">{formatCurrency(point.total)}</p>
-                        <div className="mx-auto flex h-[220px] w-10 flex-col justify-end overflow-hidden rounded bg-slate-100">
+                        <div className="mx-auto flex w-10 flex-col justify-end overflow-hidden rounded bg-slate-100" style={{ height: `${chartColumnHeight}px` }}>
                           <div className="flex flex-col" style={{ height: `${columnHeight}px` }}>
                             {cardNames.map((cardName, index) => {
                               const value = point[cardName] ?? 0;

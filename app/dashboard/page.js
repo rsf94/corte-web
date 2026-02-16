@@ -59,20 +59,24 @@ export default async function Dashboard({ searchParams }) {
   const toISO = toParam ? startOfMonthISO(toParam.length === 7 ? `${toParam}-01` : toParam) : "";
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold">Pagos TDC por mes</h1>
-        <p className="text-slate-600">Vista read-only de cashflow mensual por tarjeta.</p>
-        <a className="text-sm font-medium text-blue-700 hover:underline" href="/dashboard/expenses">Ir a Expenses Explorer</a>
+    <main className="mx-auto max-w-6xl space-y-8 px-6 py-8">
+      <div className="rounded border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold">Pagos por tarjeta (por mes)</h1>
+          <p className="text-slate-600">Vista mensual por tarjeta usando fechas de corte.</p>
+          <a className="text-sm font-medium text-blue-700 transition-colors hover:text-blue-800 hover:underline" href="/dashboard/expenses">
+            Ver gastos
+          </a>
+        </div>
       </div>
 
       {linkHandling.error ? (
-        <div className="mt-6 rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {linkHandling.error}
-        </div>
+        <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">{linkHandling.error}</div>
       ) : null}
 
-      <CashflowTable initialData={null} initialFromISO={fromISO} initialToISO={toISO} />
+      <div className="rounded border border-slate-200 bg-white p-5 shadow-sm">
+        <CashflowTable initialData={null} initialFromISO={fromISO} initialToISO={toISO} />
+      </div>
     </main>
   );
 }

@@ -8,7 +8,7 @@ export default function ExpensesFilters({
 }) {
   return (
     <form
-      className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-2 xl:grid-cols-6"
+      className="grid grid-cols-1 gap-4 rounded border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2 xl:grid-cols-6"
       onSubmit={(event) => {
         event.preventDefault();
         onApply();
@@ -35,13 +35,13 @@ export default function ExpensesFilters({
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
-        Método de pago
+        Tarjeta
         <select
           className="rounded border border-slate-300 px-3 py-2"
           value={draft.payment_method}
           onChange={(event) => onDraftChange("payment_method", event.target.value)}
         >
-          <option value="">Todos</option>
+          <option value="">Todas</option>
           {paymentMethods.map((value) => (
             <option key={value} value={value}>
               {value}
@@ -75,7 +75,7 @@ export default function ExpensesFilters({
         >
           <option value="all">Todos</option>
           <option value="true">Solo MSI</option>
-          <option value="false">Solo no-MSI</option>
+          <option value="false">Solo no MSI</option>
         </select>
       </label>
 
@@ -84,7 +84,7 @@ export default function ExpensesFilters({
         <input
           className="rounded border border-slate-300 px-3 py-2"
           type="search"
-          placeholder="merchant, description o raw_text"
+          placeholder="comercio, descripción o texto original"
           value={draft.q}
           onChange={(event) => onDraftChange("q", event.target.value)}
         />
@@ -92,11 +92,11 @@ export default function ExpensesFilters({
 
       <div className="md:col-span-2 xl:col-span-6">
         <button
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           type="submit"
           disabled={isLoading}
         >
-          Apply Filters
+          Aplicar filtros
         </button>
       </div>
     </form>
