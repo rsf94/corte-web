@@ -168,3 +168,97 @@ test("cashflow route fallback legacy usa chat_links cuando está habilitado", as
     restore();
   }
 });
+
+test("cashflow route con fallback legacy deshabilitado no truena si no hay chat linked", async () => {
+  const restore = withEnv({
+    AUTH_ALLOWED_EMAILS: "user@example.com",
+    BQ_PROJECT_ID: "project",
+    BQ_DATASET: "dataset",
+    BQ_TABLE: "expenses",
+    ENABLE_LEGACY_CHAT_FALLBACK: "false"
+  });
+
+  try {
+    const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
+    const req = new Request("http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-01-01");
+    const seenQueries = [];
+
+    const response = await handleCashflowGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        seenQueries.push({ query, params });
+        const resolved = identityResolverQuery(query, { userId: "user-123", chatId: "" });
+        if (resolved) return resolved;
+        return [[]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.rows, []);
+    assert.ok(!seenQueries.some((entry) => entry.query.includes("FROM `project.dataset.chat_links`")));
+  } finally {
+    restore();
+  }
+});
+
+test("cashflow route captura errores de BigQuery y loguea cashflow_error estructurado", async () => {
+  const restore = withEnv({
+    AUTH_ALLOWED_EMAILS: "user@example.com",
+    BQ_PROJECT_ID: "project",
+    BQ_DATASET: "dataset",
+    BQ_TABLE: "expenses"
+  });
+
+  const logs = [];
+  const originalError = console.error;
+  console.error = (...args) => {
+    logs.push(args.join(" "));
+  };
+
+  try {
+    const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
+    const req = new Request("http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-02-01", {
+      headers: { "x-request-id": "req-123" }
+    });
+
+    const response = await handleCashflowGet(req, {
+      getSession: async () => ({ user: { email: "USER@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        if (params) {
+          for (const value of Object.values(params)) {
+            assert.notEqual(value, null);
+            assert.notEqual(value, undefined);
+          }
+        }
+
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
+        if (resolved) return resolved;
+
+        const error = new Error("Parameter types must be provided for null values");
+        error.name = "PartialFailureError";
+        error.errors = [{ reason: "invalidQuery" }];
+        error.code = 400;
+        throw error;
+      }
+    });
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { ok: false, error: "Internal" });
+
+    assert.equal(logs.length, 1);
+    const payload = JSON.parse(logs[0]);
+    assert.equal(payload.type, "cashflow_error");
+    assert.equal(payload.request_id, "req-123");
+    assert.equal(payload.has_session, true);
+    assert.equal(payload.email, "user@example.com");
+    assert.equal(payload.user_id, "user-123");
+    assert.equal(payload.from, "2024-01-01");
+    assert.equal(payload.to, "2024-02-01");
+    assert.equal(payload.bigquery.name, "PartialFailureError");
+  } finally {
+    console.error = originalError;
+    restore();
+  }
+});

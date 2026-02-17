@@ -1,9 +1,10 @@
 import { BigQuery } from "@google-cloud/bigquery";
+import crypto from "node:crypto";
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
 import { fetchLatestLinkedChatIdByUserId } from "../../../lib/identity_links.js";
 import { logAccessDenied } from "../../../lib/access_log.js";
-import { getAllowedEmails, isEmailAllowed } from "../../../lib/allowed_emails.js";
+import { getAllowedEmails, isEmailAllowed, normalizeEmail } from "../../../lib/allowed_emails.js";
 import { getMonthRange, normalizeMonthStart } from "../../../lib/months.js";
 import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
 
@@ -119,8 +120,8 @@ async function fetchExpenseAggregatesByUser({ userId, fromISO, toISO }, queryFn 
   }));
 }
 
-async function fetchExpenseAggregatesLegacy({ userId, fromISO, toISO }, queryFn = defaultQueryFn) {
-  const chatId = await fetchLatestLinkedChatIdByUserId(userId, { queryFn });
+async function fetchExpenseAggregatesLegacy({ userId, fromISO, toISO, linkedChatId = "" }, queryFn = defaultQueryFn) {
+  const chatId = linkedChatId || (await fetchLatestLinkedChatIdByUserId(userId, { queryFn }));
   if (!chatId) return [];
 
   const dataset = requiredEnv("BQ_DATASET");
@@ -203,6 +204,53 @@ function addToTotals(target, key, amount) {
   target[key] = current + amount;
 }
 
+async function fetchExpenseAggregatesWithoutRules({ userId, fromISO, toISO }, queryFn = defaultQueryFn) {
+  const dataset = requiredEnv("BQ_DATASET");
+  const projectId = requiredEnv("BQ_PROJECT_ID");
+  const expensesTable = `\`${projectId}.${dataset}.${requiredEnv("BQ_TABLE")}\``;
+
+  const query = `
+    SELECT
+      COALESCE(NULLIF(TRIM(e.payment_method), ""), "Sin método") AS card_name,
+      DATE_TRUNC(e.purchase_date, MONTH) AS billing_month,
+      SUM(e.amount_mxn) AS total
+    FROM ${expensesTable} e
+    WHERE e.user_id = @user_id
+      AND e.purchase_date BETWEEN DATE(@from_date) AND DATE(@to_date)
+      AND (e.is_msi IS FALSE OR e.is_msi IS NULL)
+    GROUP BY card_name, billing_month
+  `;
+
+  const [rows] = await queryFn({
+    query,
+    params: {
+      user_id: String(userId),
+      from_date: fromISO,
+      to_date: toISO
+    }
+  });
+
+  return rows.map((row) => ({
+    card_name: row.card_name,
+    billing_month: row.billing_month?.value ?? row.billing_month,
+    total: Number(row.total || 0)
+  }));
+}
+
+function getBigQueryErrorDetails(error) {
+  return {
+    name: error?.name || "Error",
+    message: String(error?.message || ""),
+    code: error?.code || null,
+    reason: error?.errors?.[0]?.reason || null,
+    partial_failure_count: Array.isArray(error?.errors) ? error.errors.length : 0
+  };
+}
+
+function logCashflowError(errorPayload) {
+  console.error(JSON.stringify({ type: "cashflow_error", ...errorPayload }));
+}
+
 export async function handleCashflowGet(
   request,
   {
@@ -210,12 +258,18 @@ export async function handleCashflowGet(
     queryFn = defaultQueryFn
   } = {}
 ) {
+  const requestUrl = new URL(request.url);
+  const { searchParams } = requestUrl;
+  const from = searchParams.get("from");
+  const to = searchParams.get("to");
+  const requestId = request.headers.get("x-request-id") || crypto.randomUUID?.() || "";
+  let hasSession = false;
+  let email = "";
+  let userId = "";
+  let chatId = "";
+
   try {
-    const requestUrl = new URL(request.url);
-    const { searchParams } = requestUrl;
     const allowedEmails = getAllowedEmails();
-    const from = searchParams.get("from");
-    const to = searchParams.get("to");
 
     if (!allowedEmails.length) {
       logAccessDenied({ reason: "missing_allowlist", email: "", path: requestUrl.pathname });
@@ -227,8 +281,9 @@ export async function handleCashflowGet(
       logAccessDenied({ reason: "missing_session", email: "", path: requestUrl.pathname });
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
+    hasSession = true;
 
-    const email = session.user?.email ?? "";
+    email = normalizeEmail(session.user?.email ?? "");
     if (!isEmailAllowed(email)) {
       logAccessDenied({ reason: "email_not_allowed", email, path: requestUrl.pathname });
       return Response.json({ error: "Tu cuenta no está autorizada. Solicita acceso." }, { status: 403 });
@@ -236,6 +291,7 @@ export async function handleCashflowGet(
 
     const authContext = await getAuthedUserContext(request, { getSession: async () => session, queryFn });
     if (authContext.errorResponse) return authContext.errorResponse;
+    userId = String(authContext.user_id || "");
 
     const fromISO = parseMonthParam(from);
     const toISO = parseMonthParam(to);
@@ -247,8 +303,15 @@ export async function handleCashflowGet(
     const months = buildMonths(fromISO, toISO);
     let aggregates = await fetchExpenseAggregatesByUser({ userId: authContext.user_id, fromISO, toISO }, queryFn);
 
+    if (!aggregates.length) {
+      aggregates = await fetchExpenseAggregatesWithoutRules({ userId: authContext.user_id, fromISO, toISO }, queryFn);
+    }
+
     if (!aggregates.length && shouldUseLegacyFallback()) {
-      aggregates = await fetchExpenseAggregatesLegacy({ userId: authContext.user_id, fromISO, toISO }, queryFn);
+      chatId = await fetchLatestLinkedChatIdByUserId(authContext.user_id, { queryFn });
+      if (chatId) {
+        aggregates = await fetchExpenseAggregatesLegacy({ userId: authContext.user_id, fromISO, toISO, linkedChatId: chatId }, queryFn);
+      }
     }
 
     const rowsByCard = new Map();
@@ -277,7 +340,17 @@ export async function handleCashflowGet(
 
     return Response.json({ ok: true, months, rows, totals });
   } catch (error) {
-    return Response.json({ error: error.message ?? "Server error" }, { status: 500 });
+    logCashflowError({
+      request_id: requestId,
+      has_session: hasSession,
+      email,
+      user_id: userId || undefined,
+      chat_id: chatId || undefined,
+      from,
+      to,
+      bigquery: getBigQueryErrorDetails(error)
+    });
+    return Response.json({ ok: false, error: "Internal" }, { status: 500 });
   }
 }
 
