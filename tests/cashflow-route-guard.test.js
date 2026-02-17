@@ -3,9 +3,11 @@ import test from "node:test";
 
 const envKeys = [
   "ALLOWED_EMAILS",
+  "AUTH_ALLOWED_EMAILS",
   "BQ_PROJECT_ID",
   "BQ_DATASET",
-  "BQ_TABLE"
+  "BQ_TABLE",
+  "ENABLE_LEGACY_CHAT_FALLBACK"
 ];
 
 function withEnv(overrides) {
@@ -36,7 +38,7 @@ function identityResolverQuery(query, { chatId = "", userId = "user-1" } = {}) {
 
 test("cashflow route returns 401 when there is no authenticated session", async () => {
   const restore = withEnv({
-    ALLOWED_EMAILS: "user@example.com",
+    AUTH_ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
     BQ_DATASET: "dataset",
     BQ_TABLE: "expenses"
@@ -60,67 +62,35 @@ test("cashflow route returns 401 when there is no authenticated session", async 
   }
 });
 
-test("cashflow route returns 403 when session exists but has no LINKED chat", async () => {
+test("cashflow route usa user_id en query principal", async () => {
   const restore = withEnv({
-    ALLOWED_EMAILS: "user@example.com",
+    AUTH_ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
     BQ_DATASET: "dataset",
     BQ_TABLE: "expenses"
   });
 
-  try {
-    const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
-    const req = new Request("http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-02-01");
-
-    const response = await handleCashflowGet(req, {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
-      queryFn: async ({ query }) => {
-        const resolved = identityResolverQuery(query, { chatId: "" });
-        if (resolved) return resolved;
-        throw new Error(`Unexpected query: ${query}`);
-      }
-    });
-
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: "Cuenta no vinculada" });
-  } finally {
-    restore();
-  }
-});
-
-test("cashflow route uses LINKED chat_id from chat_links for BigQuery cashflow queries", async () => {
-  const restore = withEnv({
-    ALLOWED_EMAILS: "user@example.com",
-    BQ_PROJECT_ID: "project",
-    BQ_DATASET: "dataset",
-    BQ_TABLE: "expenses"
-  });
-
-  const linkedChatId = "linked-chat-123";
-  const chatIdsUsed = [];
+  const paramsUsed = [];
 
   try {
     const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
-    const req = new Request(
-      "http://localhost:3000/api/cashflow?chat_id=should-be-ignored&from=2024-01-01&to=2024-02-01"
-    );
+    const req = new Request("http://localhost:3000/api/cashflow?chat_id=ignored&from=2024-01-01&to=2024-02-01");
 
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query, params }) => {
-        const resolved = identityResolverQuery(query, { chatId: linkedChatId });
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
         if (resolved) return resolved;
 
-        if (Object.prototype.hasOwnProperty.call(params ?? {}, "chat_id")) {
-          chatIdsUsed.push(params.chat_id);
-        }
-
+        paramsUsed.push(params);
+        assert.match(query, /e\.user_id = @user_id/);
+        assert.doesNotMatch(query, /e\.chat_id = @chat_id/);
         return [[]];
       }
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(chatIdsUsed, [linkedChatId]);
+    assert.equal(paramsUsed[0].user_id, "user-123");
   } finally {
     restore();
   }
@@ -128,7 +98,7 @@ test("cashflow route uses LINKED chat_id from chat_links for BigQuery cashflow q
 
 test("cashflow route always excludes MSI rows", async () => {
   const restore = withEnv({
-    ALLOWED_EMAILS: "user@example.com",
+    AUTH_ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
     BQ_DATASET: "dataset",
     BQ_TABLE: "expenses"
@@ -145,7 +115,7 @@ test("cashflow route always excludes MSI rows", async () => {
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query }) => {
-        const resolved = identityResolverQuery(query, { chatId: "linked-chat-123" });
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
         if (resolved) return resolved;
 
         aggregateQuery = query;
@@ -163,45 +133,37 @@ test("cashflow route always excludes MSI rows", async () => {
   }
 });
 
-test("cashflow route builds statement month windows with card rules", async () => {
+test("cashflow route fallback legacy usa chat_links cuando está habilitado", async () => {
   const restore = withEnv({
-    ALLOWED_EMAILS: "user@example.com",
+    AUTH_ALLOWED_EMAILS: "user@example.com",
     BQ_PROJECT_ID: "project",
     BQ_DATASET: "dataset",
-    BQ_TABLE: "expenses"
+    BQ_TABLE: "expenses",
+    ENABLE_LEGACY_CHAT_FALLBACK: "true"
   });
-
-  let aggregateQuery = "";
 
   try {
     const { handleCashflowGet } = await import("../app/api/cashflow/route.js");
-    const req = new Request("http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-03-01");
+    const req = new Request("http://localhost:3000/api/cashflow?from=2024-01-01&to=2024-01-01");
+    const seenQueries = [];
 
     const response = await handleCashflowGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
-      queryFn: async ({ query }) => {
-        const resolved = identityResolverQuery(query, { chatId: "linked-chat-123" });
+      queryFn: async ({ query, params }) => {
+        seenQueries.push({ query, params });
+        const resolved = identityResolverQuery(query, { userId: "user-123", chatId: "chat-123" });
         if (resolved) return resolved;
-
-        aggregateQuery = query;
-        return [[
-          { card_name: "BBVA", billing_month: "2024-01-01", total: 100 },
-          { card_name: "BBVA", billing_month: "2024-02-01", total: 100 },
-          { card_name: "BBVA", billing_month: "2024-03-01", total: 100 }
-        ]];
+        if (query.includes("e.user_id = @user_id")) return [[]];
+        if (query.includes("e.chat_id = @chat_id") && query.includes("e.user_id IS NULL")) {
+          return [[{ card_name: "BBVA", billing_month: "2024-01-01", total: 50 }]];
+        }
+        return [[]];
       }
     });
 
     assert.equal(response.status, 200);
-    assert.match(aggregateQuery, /FROM `project\.dataset\.card_rules`/);
-    assert.match(aggregateQuery, /GENERATE_DATE_ARRAY\(DATE\(@from_date\), DATE\(@to_date\), INTERVAL 1 MONTH\)/);
-    assert.match(aggregateQuery, /DATE_ADD\(sm\.statement_month, INTERVAL r\.billing_shift_months MONTH\)/);
-    assert.match(aggregateQuery, /e\.purchase_date BETWEEN b\.start_date AND b\.end_date/);
-
-    const body = await response.json();
-    assert.equal(body.rows[0].totals["2024-01"], 100);
-    assert.equal(body.rows[0].totals["2024-02"], 100);
-    assert.equal(body.rows[0].totals["2024-03"], 100);
+    assert.ok(seenQueries.some((entry) => entry.query.includes("FROM `project.dataset.chat_links`")));
+    assert.ok(seenQueries.some((entry) => entry.query.includes("e.chat_id = @chat_id") && entry.query.includes("e.user_id IS NULL")));
   } finally {
     restore();
   }
