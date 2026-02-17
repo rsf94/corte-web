@@ -41,11 +41,21 @@ test("expenses explorer renders filtros tabla y paginación", async () => {
   assert.match(source, /data-testid="expenses-explorer"/);
   assert.match(filtersSource, /Aplicar filtros/);
   assert.match(filtersSource, /comercio, descripción o texto original/);
-  assert.match(source, /\+ Nuevo gasto/);
-  assert.match(source, /Registrar gasto/);
-  assert.match(source, /Aún no tienes gastos en web/);
+  assert.doesNotMatch(source, /\+ Nuevo gasto/);
+  assert.match(source, /Usa la pestaña Captura para registrar el primero/);
   assert.match(source, /Cargar más/);
   assert.match(source, /ExpensesTable/);
   assert.match(tableSource, /Fecha/);
   assert.match(tableSource, /Meses MSI/);
+});
+
+test("captura chat smoke usa flujo draft y confirmación", async () => {
+  const source = await fs.readFile(new URL("../app/dashboard/captura/captura-chat.js", import.meta.url), "utf8");
+
+  assert.match(source, /data-testid="captura-chat"/);
+  assert.match(source, /fetch\("\/api\/expense-capture-context"/);
+  assert.match(source, /fetch\("\/api\/expense-draft"/);
+  assert.match(source, /fetch\("\/api\/expenses"/);
+  assert.match(source, /Confirmar/);
+  assert.match(source, /✅ Guardado/);
 });
