@@ -41,6 +41,9 @@ test("expenses explorer renders filtros tabla y paginación", async () => {
   assert.match(source, /data-testid="expenses-explorer"/);
   assert.match(filtersSource, /Aplicar filtros/);
   assert.match(filtersSource, /comercio, descripción o texto original/);
+  assert.match(source, /\+ Nuevo gasto/);
+  assert.match(source, /Registrar gasto/);
+  assert.match(source, /Aún no tienes gastos en web/);
   assert.match(source, /Cargar más/);
   assert.match(source, /ExpensesTable/);
   assert.match(tableSource, /Fecha/);

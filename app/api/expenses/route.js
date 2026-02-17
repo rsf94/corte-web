@@ -1,7 +1,10 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { getServerSession } from "next-auth";
+import crypto from "node:crypto";
 import { getAuthOptions } from "../../../lib/auth.js";
-import { resolveLatestLinkedChatIdByEmail } from "../../../lib/identity_links.js";
+import { fetchLatestLinkedChatIdByUserId } from "../../../lib/identity_links.js";
+import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
+import { convertToMxn } from "../../../lib/fx/frankfurter.js";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +38,32 @@ function parseLimit(value) {
   return Math.min(parsed, 200);
 }
 
+function shouldUseLegacyFallback() {
+  return String(process.env.ENABLE_LEGACY_CHAT_FALLBACK || "").toLowerCase() === "true";
+}
+
+function normalizeCurrency(value = "") {
+  const normalized = String(value || "MXN").trim().toUpperCase();
+  return normalized || "MXN";
+}
+
+function normalizeRow(row, source = "web_user") {
+  return {
+    id: String(row.id ?? ""),
+    purchase_date: row.purchase_date?.value ?? row.purchase_date ?? "",
+    payment_method: row.payment_method ?? "",
+    category: row.category ?? "",
+    merchant: row.merchant ?? "",
+    description: row.description ?? "",
+    raw_text: row.raw_text ?? "",
+    amount_mxn: Number(row.amount_mxn ?? 0),
+    is_msi: Boolean(row.is_msi ?? false),
+    msi_months: row.msi_months === null || row.msi_months === undefined ? null : Number(row.msi_months),
+    created_at: row.created_at?.value ?? row.created_at ?? "",
+    source
+  };
+}
+
 export function encodeCursor(row) {
   const payload = {
     purchase_date: row.purchase_date,
@@ -63,30 +92,14 @@ export function decodeCursor(cursor) {
   }
 }
 
-function normalizeRow(row) {
-  return {
-    id: String(row.id ?? ""),
-    purchase_date: row.purchase_date?.value ?? row.purchase_date ?? "",
-    payment_method: row.payment_method ?? "",
-    category: row.category ?? "",
-    merchant: row.merchant ?? "",
-    description: row.description ?? "",
-    raw_text: row.raw_text ?? "",
-    amount_mxn: Number(row.amount_mxn ?? 0),
-    is_msi: Boolean(row.is_msi ?? false),
-    msi_months: row.msi_months === null || row.msi_months === undefined ? null : Number(row.msi_months),
-    created_at: row.created_at?.value ?? row.created_at ?? ""
-  };
-}
-
-async function fetchExpenses({ chatId, filters, queryFn = defaultQueryFn }) {
+async function fetchExpensesByUserId({ userId, filters, queryFn = defaultQueryFn }) {
   const dataset = requiredEnv("BQ_DATASET");
   const projectId = requiredEnv("BQ_PROJECT_ID");
   const expensesTable = `\`${projectId}.${dataset}.expenses\``;
 
-  const conditions = ["chat_id = @chat_id"];
+  const conditions = ["user_id = @user_id"];
   const params = {
-    chat_id: String(chatId),
+    user_id: String(userId),
     limit_plus_one: filters.limit + 1
   };
 
@@ -159,15 +172,70 @@ async function fetchExpenses({ chatId, filters, queryFn = defaultQueryFn }) {
   `;
 
   const [rows] = await queryFn({ query, params });
-  const normalized = rows.map(normalizeRow);
-  const hasMore = normalized.length > filters.limit;
-  const items = hasMore ? normalized.slice(0, filters.limit) : normalized;
-  const nextCursor = hasMore ? encodeCursor(items[items.length - 1]) : null;
+  return rows.map((row) => normalizeRow(row, "web_user"));
+}
 
-  return {
-    items,
-    next_cursor: nextCursor
+async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }) {
+  const chatId = await fetchLatestLinkedChatIdByUserId(userId, { queryFn });
+  if (!chatId) return [];
+
+  const dataset = requiredEnv("BQ_DATASET");
+  const projectId = requiredEnv("BQ_PROJECT_ID");
+  const expensesTable = `\`${projectId}.${dataset}.expenses\``;
+
+  const conditions = ["chat_id = @chat_id", "user_id IS NULL"];
+  const params = {
+    chat_id: chatId
   };
+
+  if (filters.from) {
+    conditions.push("purchase_date >= DATE(@from_date)");
+    params.from_date = filters.from;
+  }
+  if (filters.to) {
+    conditions.push("purchase_date <= DATE(@to_date)");
+    params.to_date = filters.to;
+  }
+  if (filters.paymentMethod) {
+    conditions.push("payment_method = @payment_method");
+    params.payment_method = filters.paymentMethod;
+  }
+  if (filters.category) {
+    conditions.push("category = @category");
+    params.category = filters.category;
+  }
+  if (filters.q) {
+    conditions.push(`(
+      LOWER(COALESCE(merchant, "")) LIKE @q_like
+      OR LOWER(COALESCE(description, "")) LIKE @q_like
+      OR LOWER(COALESCE(raw_text, "")) LIKE @q_like
+    )`);
+    params.q_like = `%${filters.q.toLowerCase()}%`;
+  }
+  if (filters.isMsi !== null) {
+    conditions.push("IFNULL(is_msi, FALSE) = @is_msi");
+    params.is_msi = filters.isMsi;
+  }
+
+  const query = `
+    SELECT
+      id,
+      purchase_date,
+      payment_method,
+      category,
+      merchant,
+      description,
+      raw_text,
+      amount_mxn,
+      is_msi,
+      msi_months,
+      created_at
+    FROM ${expensesTable}
+    WHERE ${conditions.join("\n      AND ")}
+  `;
+
+  const [rows] = await queryFn({ query, params });
+  return rows.map((row) => normalizeRow(row, "legacy_chat"));
 }
 
 function getFilterValues(searchParams) {
@@ -183,6 +251,24 @@ function getFilterValues(searchParams) {
   return { from, to, paymentMethod, category, q, isMsi, limit, cursor };
 }
 
+function validateExpensePayload(payload = {}) {
+  const purchaseDate = parseISODate(payload.purchase_date);
+  const amount = Number(payload.amount);
+  const paymentMethod = String(payload.payment_method || "").trim();
+  const category = String(payload.category || "").trim();
+
+  if (!purchaseDate) return "purchase_date inválida";
+  if (!Number.isFinite(amount) || amount <= 0) return "amount inválido";
+  if (!paymentMethod) return "payment_method requerido";
+  if (!category) return "category requerida";
+  if (payload.msi_months !== undefined && payload.msi_months !== null) {
+    const months = Number.parseInt(String(payload.msi_months), 10);
+    if (!Number.isFinite(months) || months < 1) return "msi_months inválido";
+  }
+
+  return "";
+}
+
 export async function handleExpensesGet(
   request,
   {
@@ -192,22 +278,120 @@ export async function handleExpensesGet(
 ) {
   try {
     const requestUrl = new URL(request.url);
-    const session = await getSession();
-
-    if (!session) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const email = session.user?.email ?? "";
-    const chatId = await resolveLatestLinkedChatIdByEmail(email, { queryFn });
-    if (!chatId) {
-      return Response.json({ error: "Cuenta no vinculada" }, { status: 403 });
-    }
+    const authContext = await getAuthedUserContext(request, { getSession, queryFn });
+    if (authContext.errorResponse) return authContext.errorResponse;
 
     const filters = getFilterValues(requestUrl.searchParams);
-    const data = await fetchExpenses({ chatId, filters, queryFn });
+    const primary = await fetchExpensesByUserId({ userId: authContext.user_id, filters, queryFn });
 
-    return Response.json({ ok: true, ...data });
+    let normalized = primary;
+    if (!normalized.length && shouldUseLegacyFallback()) {
+      normalized = await fetchLegacyExpenses({ userId: authContext.user_id, filters, queryFn });
+    }
+
+    normalized.sort((a, b) => {
+      if (a.purchase_date !== b.purchase_date) return a.purchase_date < b.purchase_date ? 1 : -1;
+      if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+      return String(a.id).localeCompare(String(b.id)) * -1;
+    });
+
+    const hasMore = normalized.length > filters.limit;
+    const items = hasMore ? normalized.slice(0, filters.limit) : normalized;
+    const nextCursor = hasMore ? encodeCursor(items[items.length - 1]) : null;
+
+    if (!items.length) {
+      return Response.json({ ok: true, items: [], next_cursor: null, empty_reason: "no_data" });
+    }
+
+    return Response.json({ ok: true, items, next_cursor: nextCursor });
+  } catch (error) {
+    return Response.json({ error: error.message ?? "Server error" }, { status: 500 });
+  }
+}
+
+export async function handleExpensesPost(
+  request,
+  {
+    getSession = () => getServerSession(getAuthOptions()),
+    queryFn = defaultQueryFn,
+    fxConverter = convertToMxn,
+    uuidFactory = () => crypto.randomUUID()
+  } = {}
+) {
+  try {
+    const authContext = await getAuthedUserContext(request, { getSession, queryFn });
+    if (authContext.errorResponse) return authContext.errorResponse;
+
+    const payload = await request.json();
+    const validationError = validateExpensePayload(payload);
+    if (validationError) {
+      return Response.json({ error: validationError }, { status: 400 });
+    }
+
+    const dataset = requiredEnv("BQ_DATASET");
+    const projectId = requiredEnv("BQ_PROJECT_ID");
+    const expensesTable = `\`${projectId}.${dataset}.expenses\``;
+
+    const currency = normalizeCurrency(payload.currency);
+    const amount = Number(payload.amount);
+    const purchaseDate = parseISODate(payload.purchase_date);
+    const isMsi = Boolean(payload.is_msi ?? false);
+    const msiMonths = payload.msi_months === undefined || payload.msi_months === null
+      ? null
+      : Number.parseInt(String(payload.msi_months), 10);
+
+    let amountMxn = amount;
+    let amountMxnSource = "direct";
+    let originalAmount = null;
+    let originalCurrency = null;
+    let fxRate = null;
+    let fxProvider = null;
+    let fxDate = null;
+
+    if (currency !== "MXN") {
+      const conversion = await fxConverter({ amount, baseCurrency: currency, quoteCurrency: "MXN", date: purchaseDate });
+      amountMxn = Number((amount * conversion.rate).toFixed(2));
+      amountMxnSource = "fx";
+      originalAmount = amount;
+      originalCurrency = currency;
+      fxRate = conversion.rate;
+      fxProvider = conversion.provider;
+      fxDate = conversion.date;
+    }
+
+    const params = {
+      id: uuidFactory(),
+      purchase_date: purchaseDate,
+      amount_mxn: amountMxn,
+      currency,
+      payment_method: String(payload.payment_method).trim(),
+      category: String(payload.category).trim(),
+      merchant: String(payload.merchant || "").trim() || null,
+      description: String(payload.description || "").trim() || null,
+      is_msi: isMsi,
+      msi_months: msiMonths,
+      trip_id: String(payload.trip_id || "").trim() || null,
+      user_id: authContext.user_id,
+      original_amount: originalAmount,
+      original_currency: originalCurrency,
+      fx_rate: fxRate,
+      fx_provider: fxProvider,
+      fx_date: fxDate,
+      amount_mxn_source: amountMxnSource
+    };
+
+    const query = `
+      INSERT INTO ${expensesTable}
+      (id, purchase_date, amount_mxn, currency, payment_method, category, merchant, description, is_msi, msi_months, trip_id,
+       user_id, chat_id, created_at, original_amount, original_currency, fx_rate, fx_provider, fx_date, amount_mxn_source)
+      VALUES
+      (@id, DATE(@purchase_date), @amount_mxn, @currency, @payment_method, @category, @merchant, @description, @is_msi, @msi_months, @trip_id,
+       @user_id, NULL, CURRENT_TIMESTAMP(), @original_amount, @original_currency, @fx_rate, @fx_provider, @fx_date, @amount_mxn_source)
+    `;
+
+    await queryFn({ query, params });
+
+    return Response.json({ ok: true, id: params.id });
   } catch (error) {
     return Response.json({ error: error.message ?? "Server error" }, { status: 500 });
   }
@@ -215,4 +399,8 @@ export async function handleExpensesGet(
 
 export async function GET(request) {
   return handleExpensesGet(request);
+}
+
+export async function POST(request) {
+  return handleExpensesPost(request);
 }

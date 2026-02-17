@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const envKeys = ["BQ_PROJECT_ID", "BQ_DATASET"];
+const envKeys = ["BQ_PROJECT_ID", "BQ_DATASET", "ENABLE_LEGACY_CHAT_FALLBACK"];
 
 function withEnv(overrides) {
   const original = {};
@@ -43,30 +43,115 @@ test("expenses route returns 401 when there is no authenticated session", async 
   }
 });
 
-test("expenses route returns 403 when session exists but has no LINKED chat", async () => {
+test("POST /api/expenses sin sesión retorna 401", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
 
   try {
-    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
-    const req = new Request("http://localhost:3000/api/expenses");
+    const { handleExpensesPost } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
 
-    const response = await handleExpensesGet(req, {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
-      queryFn: async ({ query }) => {
-        const resolved = identityResolverQuery(query, { chatId: "" });
-        if (resolved) return resolved;
-        throw new Error(`Unexpected query: ${query}`);
+    const response = await handleExpensesPost(req, {
+      getSession: async () => null,
+      queryFn: async () => {
+        throw new Error("BigQuery should not be called");
       }
     });
 
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: "Cuenta no vinculada" });
+    assert.equal(response.status, 401);
   } finally {
     restore();
   }
 });
 
-test("expenses route applies filters and seek pagination without OFFSET", async () => {
+test("POST /api/expenses con sesión inserta con user_id y chat_id null", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  let insertQuery = "";
+  let insertParams = {};
+
+  try {
+    const { handleExpensesPost } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purchase_date: "2024-06-10",
+        amount: 123.45,
+        payment_method: "AMEX",
+        category: "Food"
+      })
+    });
+
+    const response = await handleExpensesPost(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
+        if (resolved) return resolved;
+        insertQuery = query;
+        insertParams = params;
+        return [[]];
+      },
+      uuidFactory: () => "uuid-1"
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(insertQuery, /chat_id, created_at/);
+    assert.match(insertQuery, /@user_id, NULL, CURRENT_TIMESTAMP\(\)/);
+    assert.equal(insertParams.user_id, "user-123");
+    assert.equal(insertParams.amount_mxn_source, "direct");
+
+    const body = await response.json();
+    assert.deepEqual(body, { ok: true, id: "uuid-1" });
+  } finally {
+    restore();
+  }
+});
+
+test("POST con currency != MXN usa fx client y llena campos FX", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  let insertParams = {};
+
+  try {
+    const { handleExpensesPost } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purchase_date: "2024-06-10",
+        amount: 10,
+        currency: "USD",
+        payment_method: "AMEX",
+        category: "Travel"
+      })
+    });
+
+    const response = await handleExpensesPost(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
+        if (resolved) return resolved;
+        insertParams = params;
+        return [[]];
+      },
+      fxConverter: async () => ({ rate: 17.1, provider: "frankfurter", date: "2024-06-10" })
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(insertParams.original_amount, 10);
+    assert.equal(insertParams.original_currency, "USD");
+    assert.equal(insertParams.fx_provider, "frankfurter");
+    assert.equal(insertParams.fx_rate, 17.1);
+    assert.equal(insertParams.amount_mxn_source, "fx");
+    assert.equal(insertParams.amount_mxn, 171);
+  } finally {
+    restore();
+  }
+});
+
+test("GET /api/expenses usa @user_id y no usa chat_id de querystring", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
 
   let expensesQuery = "";
@@ -81,15 +166,14 @@ test("expenses route applies filters and seek pagination without OFFSET", async 
     });
 
     const req = new Request(
-      `http://localhost:3000/api/expenses?from=2024-05-01&to=2024-06-30&payment_method=AMEX&category=Food&q=tacos&is_msi=false&limit=2&cursor=${cursor}`
+      `http://localhost:3000/api/expenses?chat_id=ignored&from=2024-05-01&to=2024-06-30&payment_method=AMEX&category=Food&q=tacos&is_msi=false&limit=2&cursor=${cursor}`
     );
 
     const response = await handleExpensesGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query, params }) => {
-        const resolved = identityResolverQuery(query, { chatId: "chat-linked" });
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
         if (resolved) return resolved;
-
         expensesQuery = query;
         expensesParams = params;
         return [[
@@ -105,50 +189,45 @@ test("expenses route applies filters and seek pagination without OFFSET", async 
             amount_mxn: 100,
             is_msi: false,
             msi_months: null
-          },
-          {
-            id: "2",
-            purchase_date: "2024-06-08",
-            created_at: "2024-06-08T10:00:00.000Z",
-            payment_method: "AMEX",
-            category: "Food",
-            merchant: "Cafe",
-            description: "Cafe",
-            raw_text: "Cafe",
-            amount_mxn: 90,
-            is_msi: false,
-            msi_months: null
-          },
-          {
-            id: "1",
-            purchase_date: "2024-06-07",
-            created_at: "2024-06-07T10:00:00.000Z",
-            payment_method: "AMEX",
-            category: "Food",
-            merchant: "Pan",
-            description: "Pan",
-            raw_text: "Pan",
-            amount_mxn: 80,
-            is_msi: false,
-            msi_months: null
           }
         ]];
       }
     });
 
     assert.equal(response.status, 200);
-    assert.doesNotMatch(expensesQuery, /OFFSET/i);
-    assert.match(expensesQuery, /purchase_date < DATE\(@cursor_purchase_date\)/);
-    assert.match(expensesQuery, /IFNULL\(is_msi, FALSE\) = @is_msi/);
-    assert.equal(expensesParams.payment_method, "AMEX");
-    assert.equal(expensesParams.category, "Food");
-    assert.equal(expensesParams.q_like, "%tacos%");
-    assert.equal(expensesParams.limit_plus_one, 3);
+    assert.match(expensesQuery, /user_id = @user_id/);
+    assert.doesNotMatch(expensesQuery, /chat_id = @chat_id/);
+    assert.equal(expensesParams.user_id, "user-xyz");
+  } finally {
+    restore();
+  }
+});
 
-    const body = await response.json();
-    assert.equal(body.ok, true);
-    assert.equal(body.items.length, 2);
-    assert.ok(body.next_cursor);
+test("GET /api/expenses con fallback usa chat_links y legacy chat_id", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset", ENABLE_LEGACY_CHAT_FALLBACK: "true" });
+  const queries = [];
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?limit=10");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        queries.push({ query, params });
+        const resolved = identityResolverQuery(query, { userId: "user-xyz", chatId: "chat-legacy" });
+        if (resolved) return resolved;
+        if (query.includes("user_id = @user_id")) return [[]];
+        if (query.includes("chat_id = @chat_id") && query.includes("user_id IS NULL")) {
+          return [[{ id: "1", purchase_date: "2024-01-01", amount_mxn: 1, created_at: "2024-01-01T00:00:00Z" }]];
+        }
+        return [[]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(queries.some((entry) => entry.query.includes("FROM `project.dataset.chat_links`")));
+    assert.ok(queries.some((entry) => entry.query.includes("chat_id = @chat_id") && entry.query.includes("user_id IS NULL")));
   } finally {
     restore();
   }

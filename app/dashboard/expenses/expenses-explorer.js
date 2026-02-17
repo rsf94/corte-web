@@ -11,6 +11,18 @@ function uniqueSortedValues(items, key) {
   return Array.from(new Set(items.map((item) => item[key]).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
 
+function emptyExpenseForm(defaultDate) {
+  return {
+    purchase_date: defaultDate,
+    amount: "",
+    currency: "MXN",
+    payment_method: "",
+    category: "",
+    merchant: "",
+    description: ""
+  };
+}
+
 export default function ExpensesExplorer() {
   const defaults = useMemo(() => getDefaultExpensesDateRange(), []);
   const [draft, setDraft] = useState({
@@ -27,6 +39,10 @@ export default function ExpensesExplorer() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [hasFetched, setHasFetched] = useState(false);
+  const [showNewExpense, setShowNewExpense] = useState(false);
+  const [newExpense, setNewExpense] = useState(() => emptyExpenseForm(defaults.to));
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const paymentMethods = useMemo(() => uniqueSortedValues(items, "payment_method"), [items]);
   const categories = useMemo(() => uniqueSortedValues(items, "category"), [items]);
@@ -70,6 +86,46 @@ export default function ExpensesExplorer() {
     }
   }
 
+  async function submitNewExpense(event) {
+    event.preventDefault();
+    setIsSavingExpense(true);
+    setSaveError("");
+
+    try {
+      const res = await fetch("/api/expenses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...newExpense,
+          amount: Number(newExpense.amount)
+        })
+      });
+
+      if (res.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+
+      if (res.status === 403) {
+        window.location.assign("/unauthorized");
+        return;
+      }
+
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error(body.error || "No se pudo registrar el gasto");
+      }
+
+      setShowNewExpense(false);
+      setNewExpense(emptyExpenseForm(defaults.to));
+      await runFetch({ append: false, cursor: "", filters: activeFilters });
+    } catch (submitError) {
+      setSaveError(submitError.message || "No se pudo registrar el gasto");
+    } finally {
+      setIsSavingExpense(false);
+    }
+  }
+
   useEffect(() => {
     runFetch({ append: false, cursor: "", filters: activeFilters });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -77,6 +133,36 @@ export default function ExpensesExplorer() {
 
   return (
     <section className="space-y-6" data-testid="expenses-explorer">
+      <div className="flex justify-end">
+        <button
+          className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500"
+          type="button"
+          onClick={() => setShowNewExpense((current) => !current)}
+        >
+          + Nuevo gasto
+        </button>
+      </div>
+
+      {showNewExpense ? (
+        <form className="grid gap-3 rounded border border-slate-200 bg-white p-4" onSubmit={submitNewExpense}>
+          <p className="text-sm font-semibold text-slate-700">Registrar gasto</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <input required type="date" value={newExpense.purchase_date} onChange={(event) => setNewExpense((current) => ({ ...current, purchase_date: event.target.value }))} className="rounded border border-slate-300 px-3 py-2 text-sm" aria-label="Fecha" />
+            <input required type="number" step="0.01" min="0" value={newExpense.amount} onChange={(event) => setNewExpense((current) => ({ ...current, amount: event.target.value }))} className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Monto" />
+            <input type="text" value={newExpense.currency} onChange={(event) => setNewExpense((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Moneda (MXN)" />
+            <input required type="text" value={newExpense.payment_method} onChange={(event) => setNewExpense((current) => ({ ...current, payment_method: event.target.value }))} className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Método de pago" />
+            <input required type="text" value={newExpense.category} onChange={(event) => setNewExpense((current) => ({ ...current, category: event.target.value }))} className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Categoría" />
+            <input type="text" value={newExpense.merchant} onChange={(event) => setNewExpense((current) => ({ ...current, merchant: event.target.value }))} className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Comercio" />
+          </div>
+          <textarea value={newExpense.description} onChange={(event) => setNewExpense((current) => ({ ...current, description: event.target.value }))} className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Descripción" rows={3} />
+          {saveError ? <p className="text-xs text-red-600">{saveError}</p> : null}
+          <div className="flex gap-2">
+            <button disabled={isSavingExpense} className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" type="submit">Guardar gasto</button>
+            <button className="rounded border border-slate-300 px-4 py-2 text-sm" type="button" onClick={() => setShowNewExpense(false)}>Cancelar</button>
+          </div>
+        </form>
+      ) : null}
+
       <ExpensesFilters
         draft={draft}
         paymentMethods={paymentMethods}
@@ -95,7 +181,7 @@ export default function ExpensesExplorer() {
       {hasFetched && !items.length && !isLoading ? (
         <div className="flex flex-col items-center justify-center gap-2 rounded border border-slate-200 bg-slate-50 px-6 py-10 text-center text-sm text-slate-600">
           <span aria-hidden="true" className="text-xl">◌</span>
-          <p>No se encontraron gastos con los filtros seleccionados.</p>
+          <p>Aún no tienes gastos en web. Puedes registrar uno aquí o vincular Telegram.</p>
         </div>
       ) : null}
 

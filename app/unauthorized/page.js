@@ -16,8 +16,7 @@ export default function UnauthorizedPage() {
         </p>
       ) : (
         <p className="mt-3 text-sm text-slate-600">
-          Tu cuenta no está en la allowlist autorizada. Solicita acceso a un
-          administrador.
+          Tu cuenta no está autorizada. Solicita acceso.
         </p>
       )}
     </main>
