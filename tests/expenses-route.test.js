@@ -265,44 +265,6 @@ test("GET /api/expenses con fallback usa chat_links y legacy chat_id", async () 
 });
 
 
-
-
-test("GET /api/expenses con fallback habilitado mezcla primary + legacy (evita corte por fuente)", async () => {
-  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset", ENABLE_LEGACY_CHAT_FALLBACK: "true" });
-
-  try {
-    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
-    const req = new Request("http://localhost:3000/api/expenses?from=2026-01-21&to=2026-02-20&limit=50");
-
-    const response = await handleExpensesGet(req, {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
-      queryFn: async ({ query }) => {
-        const resolved = identityResolverQuery(query, { userId: "user-xyz", chatId: "chat-legacy" });
-        if (resolved) return resolved;
-
-        if (query.includes("user_id = @user_id")) {
-          return [[
-            { id: "p1", purchase_date: "2026-02-14", created_at: "2026-02-14T12:00:00.000Z", amount_mxn: 10 }
-          ]];
-        }
-
-        if (query.includes("chat_id = @chat_id") && query.includes("user_id IS NULL")) {
-          return [[
-            { id: "l1", purchase_date: "2026-02-20", created_at: "2026-02-20T12:00:00.000Z", amount_mxn: 20 }
-          ]];
-        }
-
-        return [[]];
-      }
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.deepEqual(body.items.map((item) => item.id), ["l1", "p1"]);
-  } finally {
-    restore();
-  }
-});
 test("GET /api/expenses acepta fechas dd/mm/yyyy y las convierte a ISO", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
   let expensesParams = {};

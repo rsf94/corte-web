@@ -28,6 +28,15 @@ function buildConfirmPayload(draft, selectedPaymentMethod) {
   };
 }
 
+function pickContextPaymentMethods(body) {
+  const suggestions = body?.suggestions ?? {};
+  if (Array.isArray(suggestions.payment_methods)) return suggestions.payment_methods;
+  if (Array.isArray(suggestions.paymentMethods)) return suggestions.paymentMethods;
+  if (Array.isArray(body?.payment_methods)) return body.payment_methods;
+  if (Array.isArray(body?.paymentMethods)) return body.paymentMethods;
+  return [];
+}
+
 export default function CapturaChat() {
   const [messages, setMessages] = useState([
     { id: "sys-1", role: "system", text: "Hola. Escribe un gasto como: 230 uber o 140 autolavado a 3 MSI.", time: nowTimeLabel() }
@@ -52,7 +61,7 @@ export default function CapturaChat() {
         const body = await res.json();
         if (cancelled) return;
         setTrip(body.active_trip ?? null);
-        setPaymentMethods(body.suggestions?.payment_methods ?? []);
+        setPaymentMethods(pickContextPaymentMethods(body));
         if (body.active_trip && !body.active_trip.base_currency) {
           setWarning("Tu viaje no tiene moneda base configurada. Usaremos MXN por ahora.");
         }
