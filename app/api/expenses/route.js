@@ -46,10 +46,6 @@ function parseLimit(value) {
   return Math.min(parsed, 200);
 }
 
-function shouldUseLegacyFallback() {
-  return String(process.env.ENABLE_LEGACY_CHAT_FALLBACK || "").toLowerCase() === "true";
-}
-
 function normalizeCurrency(value = "") {
   const normalized = String(value || "MXN").trim().toUpperCase();
   return normalized || "MXN";
@@ -319,6 +315,7 @@ export async function handleExpensesGet(
       }
       normalized = Array.from(deduped.values());
     }
+    let normalized = Array.from(deduped.values());
 
     normalized.sort((a, b) => {
       if (a.purchase_date !== b.purchase_date) return a.purchase_date < b.purchase_date ? 1 : -1;
