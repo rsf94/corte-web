@@ -29,7 +29,23 @@ export async function handleExpenseCaptureContextGet(
     const sessionChatId = String(session?.chat_id || session?.user?.chat_id || "").trim();
     const chatId = linkedChatId || sessionChatId;
     const context = await fetchExpenseCaptureContext({ userId: authContext.user_id, chatId }, { queryFn });
-    return Response.json({ ok: true, ...context });
+
+    console.log("expense_capture_context", {
+      user_id: authContext.user_id,
+      email: session?.user?.email || "",
+      resolvedChatId: chatId || "",
+      counts: context.diagnostics,
+      method_labels: (context.methods || []).map((method) => method.label)
+    });
+
+    return Response.json({
+      ok: true,
+      methods: context.methods.map((method) => ({ id: method.id, label: method.label })),
+      hasTrip: context.hasTrip,
+      activeTripId: context.activeTripId,
+      defaults: context.defaults,
+      active_trip: context.active_trip
+    });
   } catch (error) {
     return Response.json({ error: error.message || "Server error" }, { status: 500 });
   }

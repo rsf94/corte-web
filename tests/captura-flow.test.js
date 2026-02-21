@@ -34,6 +34,9 @@ test("draft -> seleccionar método -> confirmar resetea estado", () => {
   assert.equal(state.phase, CAPTURA_PHASES.SAVING);
 
   state = captureFlowReducer(state, { type: "confirm_success" });
+  assert.equal(state.phase, CAPTURA_PHASES.DONE);
+
+  state = captureFlowReducer(state, { type: "reset_after_done" });
   assert.deepEqual(state, createInitialCaptureState());
 });
 
@@ -62,4 +65,17 @@ test("MSI con meses explícitos no pide meses, MSI sin meses sí pide", () => {
   state = captureFlowReducer(state, { type: "set_msi_months", months: "6" });
   assert.equal(state.phase, CAPTURA_PHASES.READY_TO_CONFIRM);
   assert.equal(state.draft.msi_months, 6);
+});
+
+
+test("nuevo texto resetea draft, método y error", () => {
+  let state = createInitialCaptureState();
+  state = captureFlowReducer(state, { type: "submit_text_error", message: "error" });
+  assert.equal(state.phase, CAPTURA_PHASES.ERROR);
+
+  state = captureFlowReducer(state, { type: "submit_text_start" });
+  assert.equal(state.phase, CAPTURA_PHASES.LOADING_DRAFT);
+  assert.equal(state.errorMessage, "");
+  assert.equal(state.selectedPaymentMethod, "");
+  assert.equal(state.draft, null);
 });
