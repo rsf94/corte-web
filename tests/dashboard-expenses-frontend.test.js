@@ -84,7 +84,7 @@ test("captura chat smoke usa flujo draft y confirmación", async () => {
   assert.match(source, /fetch\("\/api\/expense-capture-context"/);
   assert.match(source, /fetch\("\/api\/expense-draft"/);
   assert.match(source, /fetch\("\/api\/expenses"/);
-  assert.match(source, /Listo\. Elige método de pago para continuar\./);
+  assert.match(source, /createMethodHint\(/);
   assert.match(source, /Guardado ✅/);
 });
 
@@ -93,6 +93,7 @@ test("captura chat renderiza quick replies para métodos, MSI y viaje", async ()
   const source = await fs.readFile(new URL("../app/dashboard/captura/captura-chat.js", import.meta.url), "utf8");
 
   assert.match(source, /Array\.isArray\(body\.methods\)/);
+  assert.match(source, /shouldShowTripQuickReplies/);
   assert.match(source, /flow\.phase === CAPTURA_PHASES\.AWAITING_PAYMENT_METHOD/);
   assert.match(source, /flow\.phase === CAPTURA_PHASES\.AWAITING_MSI_MONTHS/);
   assert.match(source, /\[3, 6, 9, 12\]/);

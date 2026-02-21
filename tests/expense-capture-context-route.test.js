@@ -22,7 +22,7 @@ function identityResolverQuery(query, { userId = "user-1", chatId = "" } = {}) {
   return null;
 }
 
-test("GET /api/expense-capture-context mezcla métodos de user_id + chat_id", async () => {
+test("GET /api/expense-capture-context mezcla métodos de user_id + chat_id con dedupe", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
 
   try {
@@ -62,6 +62,7 @@ test("GET /api/expense-capture-context mezcla métodos de user_id + chat_id", as
       { id: "tdc legacy", label: "TDC Legacy" },
       { id: "nu débito", label: "Nu Débito" }
     ]);
+    assert.deepEqual(body.defaults.source_counts, { user: 3, chat: 3, merged: 4 });
     assert.equal(body.hasTrip, true);
     assert.equal(body.activeTripId, "trip-1");
   } finally {
@@ -69,7 +70,7 @@ test("GET /api/expense-capture-context mezcla métodos de user_id + chat_id", as
   }
 });
 
-test("GET /api/expense-capture-context no regresa vacío si legacy tiene métodos", async () => {
+test("GET /api/expense-capture-context no regresa vacío si legacy chat_id tiene métodos aunque no existan por user_id", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
 
   try {
@@ -83,11 +84,11 @@ test("GET /api/expense-capture-context no regresa vacío si legacy tiene método
         if (resolved) return resolved;
 
         if (query.includes("FROM `project.dataset.trips`")) return [[]];
-        if (query.includes("FROM `project.dataset.card_rules`")) {
-          if (params.owner_id === "chat-999") return [[{ card_name: "Santander LikeU" }]];
+        if (query.includes("FROM `project.dataset.card_rules`")) return [[]];
+        if (query.includes("FROM `project.dataset.expenses`")) {
+          if (params.owner_id === "chat-999") return [[{ payment_method: "Santander LikeU", user_id: "migrated-user" }]];
           return [[]];
         }
-        if (query.includes("FROM `project.dataset.expenses`")) return [[]];
         if (query.includes("FROM `project.dataset.accounts`")) return [[]];
 
         return [[]];
@@ -97,6 +98,7 @@ test("GET /api/expense-capture-context no regresa vacío si legacy tiene método
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.deepEqual(body.methods, [{ id: "santander likeu", label: "Santander LikeU" }]);
+    assert.equal(body.defaults.source_counts.chat, 1);
     assert.equal(body.hasTrip, false);
     assert.equal(body.activeTripId, null);
   } finally {

@@ -2,10 +2,14 @@
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CAPTURA_PHASES, captureFlowReducer, createInitialCaptureState } from "../../../lib/captura_flow.js";
-
-function nowTimeLabel() {
-  return new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
-}
+import {
+  createMethodHint,
+  createWelcomeMessage,
+  logCaptureDecision,
+  nowTimeLabel,
+  resolveDraftMethod,
+  shouldShowTripQuickReplies
+} from "../../../lib/captura_chat_logic.js";
 
 function formatMoney(value, currency = "MXN") {
   return new Intl.NumberFormat("es-MX", { style: "currency", currency }).format(Number(value || 0));
@@ -26,24 +30,6 @@ function buildConfirmPayload(draft, selectedPaymentMethod, includeTrip) {
   };
 }
 
-function normalizeMethod(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function resolveDraftMethod(draft, methods) {
-  const draftMethod = normalizeMethod(draft?.payment_method);
-  if (!draftMethod || !methods.length) return { selectedMethod: "", ambiguousMatches: [] };
-
-  const exactMatch = methods.find((method) => normalizeMethod(method.label) === draftMethod);
-  if (exactMatch) return { selectedMethod: exactMatch.label, ambiguousMatches: [] };
-
-  const partialMatches = methods.filter((method) => normalizeMethod(method.label).includes(draftMethod));
-  if (partialMatches.length === 1) return { selectedMethod: partialMatches[0].label, ambiguousMatches: [] };
-  if (partialMatches.length > 1) return { selectedMethod: "", ambiguousMatches: partialMatches.map((method) => method.label) };
-
-  return { selectedMethod: "", ambiguousMatches: [] };
-}
-
 function buildDraftSummary(draft, selectedPaymentMethod) {
   const rows = [
     `Monto: ${formatMoney(draft.original_amount, draft.original_currency)}`,
@@ -57,13 +43,14 @@ function buildDraftSummary(draft, selectedPaymentMethod) {
 
 export default function CapturaChat() {
   const [messages, setMessages] = useState([
-    { id: "sys-1", role: "system", text: "Hola 👋 Soy tu bot de captura. Escribe algo como: 230 uber.", time: nowTimeLabel() }
+    createWelcomeMessage()
   ]);
   const [text, setText] = useState("");
   const [flow, dispatch] = useReducer(captureFlowReducer, undefined, createInitialCaptureState);
   const [methods, setMethods] = useState([]);
   const [trip, setTrip] = useState(null);
   const [hasActiveTrip, setHasActiveTrip] = useState(false);
+  const [contextSourceCounts, setContextSourceCounts] = useState({ user: 0, chat: 0, merged: 0 });
   const [includeTrip, setIncludeTrip] = useState(true);
   const chatBodyRef = useRef(null);
 
@@ -79,11 +66,26 @@ export default function CapturaChat() {
 
         const contextMethods = Array.isArray(body.methods) ? body.methods : [];
         setMethods(contextMethods);
+        const sourceCounts = {
+          user: Number(body?.defaults?.source_counts?.user ?? 0),
+          chat: Number(body?.defaults?.source_counts?.chat ?? 0),
+          merged: Number(body?.defaults?.source_counts?.merged ?? contextMethods.length)
+        };
+        setContextSourceCounts(sourceCounts);
         const activeTrip = body.active_trip ?? null;
         const backendHasTrip = Boolean(body.hasTrip || body.activeTripId || activeTrip?.id);
         setTrip(activeTrip);
         setHasActiveTrip(backendHasTrip);
         setIncludeTrip(backendHasTrip);
+        logCaptureDecision("context_loaded", {
+          phase: flow.phase,
+          draft: flow.draft,
+          hasTrip: backendHasTrip,
+          activeTripId: body.activeTripId || activeTrip?.id || "",
+          methodsCount: contextMethods.length,
+          sourceCounts,
+          selectedMethodId: flow.selectedPaymentMethod
+        });
       } catch {
         if (!cancelled) {
           setMessages((current) => [...current, { id: `ctx-${Date.now()}`, role: "system", text: "No pude cargar contexto. Puedes seguir capturando.", time: nowTimeLabel() }]);
@@ -102,7 +104,20 @@ export default function CapturaChat() {
   }, [messages, flow.phase]);
 
   const methodButtons = useMemo(() => methods.map((method) => method.label), [methods]);
-  const shouldShowTripQuickReplies = Boolean(flow.draft && (hasActiveTrip || flow.draft?.trip_id));
+
+  useEffect(() => {
+    logCaptureDecision("phase_changed", {
+      phase: flow.phase,
+      draft: flow.draft,
+      hasTrip: hasActiveTrip,
+      activeTripId: trip?.id || "",
+      methodsCount: methods.length,
+      sourceCounts: contextSourceCounts,
+      selectedMethodId: flow.selectedPaymentMethod
+    });
+  }, [contextSourceCounts, flow.draft, flow.phase, flow.selectedPaymentMethod, hasActiveTrip, methods.length, trip]);
+
+  const showTripQuickReplies = shouldShowTripQuickReplies({ draft: flow.draft, hasActiveTrip });
   const canPickMethod = Boolean(flow.draft) && flow.phase !== CAPTURA_PHASES.LOADING_DRAFT && flow.phase !== CAPTURA_PHASES.SAVING;
   const shouldShowMethodEmpty = Boolean(flow.draft) && methodButtons.length === 0;
   const canSend = flow.phase !== CAPTURA_PHASES.LOADING_DRAFT && flow.phase !== CAPTURA_PHASES.SAVING;
@@ -138,11 +153,16 @@ export default function CapturaChat() {
       const match = resolveDraftMethod(body.draft, methods);
       if (match.selectedMethod) dispatch({ type: "select_payment_method", paymentMethod: match.selectedMethod });
 
-      const hint = match.ambiguousMatches.length
-        ? `Veo varias opciones (${match.ambiguousMatches.join(", ")}). Elige método de pago.`
-        : match.selectedMethod
-          ? `Listo. Método detectado: ${match.selectedMethod}.`
-          : "Listo. Elige método de pago para continuar.";
+      const hint = createMethodHint(match);
+      logCaptureDecision("draft_parsed", {
+        phase: match.selectedMethod ? CAPTURA_PHASES.READY_TO_CONFIRM : CAPTURA_PHASES.AWAITING_PAYMENT_METHOD,
+        draft: body.draft,
+        hasTrip: hasActiveTrip,
+        activeTripId: trip?.id || "",
+        methodsCount: methods.length,
+        sourceCounts: contextSourceCounts,
+        selectedMethodId: match.selectedMethod
+      });
 
       setMessages((current) => [...current, { id: `sys-${Date.now()}`, role: "system", text: hint, time: nowTimeLabel() }]);
     } catch (error) {
@@ -169,6 +189,15 @@ export default function CapturaChat() {
       setIncludeTrip(hasActiveTrip);
       setMessages((current) => [...current, { id: `done-${Date.now()}`, role: "system", text: "Guardado ✅", time: nowTimeLabel() }]);
       dispatch({ type: "reset_after_done" });
+      logCaptureDecision("expense_saved", {
+        phase: CAPTURA_PHASES.DONE,
+        draft: flow.draft,
+        hasTrip: hasActiveTrip,
+        activeTripId: trip?.id || "",
+        methodsCount: methods.length,
+        sourceCounts: contextSourceCounts,
+        selectedMethodId: flow.selectedPaymentMethod
+      });
     } catch (error) {
       dispatch({ type: "confirm_error", message: error.message });
       setMessages((current) => [...current, { id: `save-${Date.now()}`, role: "system", text: error.message || "No se pudo guardar", time: nowTimeLabel() }]);
@@ -181,9 +210,31 @@ export default function CapturaChat() {
     setMessages((current) => [...current, { id: `cancel-${Date.now()}`, role: "system", text: "Cancelado.", time: nowTimeLabel() }]);
   }
 
+  function selectPaymentMethod(method) {
+    dispatch({ type: "select_payment_method", paymentMethod: method });
+    logCaptureDecision("payment_method_selected", {
+      phase: flow.phase,
+      draft: flow.draft,
+      hasTrip: hasActiveTrip,
+      activeTripId: trip?.id || "",
+      methodsCount: methods.length,
+      sourceCounts: contextSourceCounts,
+      selectedMethodId: method
+    });
+  }
+
   function setMsiMonths(months) {
     dispatch({ type: "set_msi_months", months: String(months) });
     setMessages((current) => [...current, { id: `msi-${Date.now()}`, role: "user", text: `${months} meses`, time: nowTimeLabel() }]);
+    logCaptureDecision("msi_months_selected", {
+      phase: flow.phase,
+      draft: { ...(flow.draft || {}), msi_months: Number(months) },
+      hasTrip: hasActiveTrip,
+      activeTripId: trip?.id || "",
+      methodsCount: methods.length,
+      sourceCounts: contextSourceCounts,
+      selectedMethodId: flow.selectedPaymentMethod
+    });
   }
 
   function selectTripChoice(nextIncludeTrip) {
@@ -216,7 +267,7 @@ export default function CapturaChat() {
           </div>
         ) : null}
 
-        {shouldShowTripQuickReplies ? (
+        {showTripQuickReplies ? (
           <div className="space-y-1">
             <p className="text-xs text-slate-600">¿Este gasto pertenece al viaje activo?</p>
             <div className="flex flex-wrap gap-2">
@@ -245,7 +296,7 @@ export default function CapturaChat() {
                 key={method}
                 type="button"
                 className={`rounded-full border px-3 py-1.5 text-xs ${flow.selectedPaymentMethod === method ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white"}`}
-                onClick={() => dispatch({ type: "select_payment_method", paymentMethod: method })}
+                onClick={() => selectPaymentMethod(method)}
                 disabled={!canPickMethod}
               >
                 {method}
