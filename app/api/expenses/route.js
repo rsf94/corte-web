@@ -193,7 +193,8 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
 
   const conditions = ["chat_id = @chat_id", "user_id IS NULL"];
   const params = {
-    chat_id: chatId
+    chat_id: chatId,
+    limit_plus_one: filters.limit + 1
   };
 
   if (filters.from) {
@@ -223,6 +224,21 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
   if (filters.isMsi !== null) {
     conditions.push("IFNULL(is_msi, FALSE) = @is_msi");
     params.is_msi = filters.isMsi;
+  }
+
+  if (filters.cursor) {
+    conditions.push(`(
+      DATE(purchase_date) < DATE(@cursor_purchase_date)
+      OR (DATE(purchase_date) = DATE(@cursor_purchase_date) AND created_at < TIMESTAMP(@cursor_created_at))
+      OR (
+        DATE(purchase_date) = DATE(@cursor_purchase_date)
+        AND created_at = TIMESTAMP(@cursor_created_at)
+        AND CAST(id AS STRING) < @cursor_id
+      )
+    )`);
+    params.cursor_purchase_date = filters.cursor.purchase_date;
+    params.cursor_created_at = filters.cursor.created_at;
+    params.cursor_id = filters.cursor.id;
   }
 
   const query = `
@@ -294,8 +310,14 @@ export async function handleExpensesGet(
     const primary = await fetchExpensesByUserId({ userId: authContext.user_id, filters, queryFn });
 
     let normalized = primary;
-    if (!normalized.length && shouldUseLegacyFallback()) {
-      normalized = await fetchLegacyExpenses({ userId: authContext.user_id, filters, queryFn });
+    if (shouldUseLegacyFallback()) {
+      const legacy = await fetchLegacyExpenses({ userId: authContext.user_id, filters, queryFn });
+      const merged = [...primary, ...legacy];
+      const deduped = new Map();
+      for (const item of merged) {
+        deduped.set(String(item.id), item);
+      }
+      normalized = Array.from(deduped.values());
     }
 
     normalized.sort((a, b) => {
