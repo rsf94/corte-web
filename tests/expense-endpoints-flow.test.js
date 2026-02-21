@@ -30,10 +30,12 @@ test("endpoint-only flow: context + draft + insert + fetch (con bypass no-prod)"
       if (query.includes("FROM `project.dataset.chat_links`")) return [[{ chat_id: "chat-flow" }]];
       if (query.includes("FROM `project.dataset.trips`")) return [[{ id: "trip-active", base_currency: "mxn" }]];
 
-      if (query.includes("FROM `project.dataset.card_rules`")) {
-        if (params.owner_id === "user-flow") return [[{ card_name: "AMEX" }]];
-        if (params.owner_id === "chat-flow") return [[{ card_name: "Nu" }]];
+      if (query.includes("FROM `project.dataset.accounts`")) {
+        if (params.owner_id === "user-flow") return [[{ account_name: "AMEX" }]];
+        if (params.owner_id === "chat-flow") return [[{ account_name: "Nu" }]];
       }
+
+      if (query.includes("FROM `project.dataset.card_rules`")) return [[]];
 
       if (query.includes("INSERT INTO `project.dataset.expenses`")) {
         inserted.push({ ...params, created_at: "2026-01-10T10:00:00.000Z" });
