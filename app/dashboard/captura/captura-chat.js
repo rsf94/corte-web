@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useReducer } from "react";
-import { CAPTURA_PHASES, captureFlowReducer, createInitialCaptureState, draftNeedsMsiMonths } from "../../../lib/captura_flow.js";
+import { useEffect, useMemo, useState } from "react";
 
 function formatMoney(value, currency = "MXN") {
   return new Intl.NumberFormat("es-MX", {
@@ -43,7 +42,10 @@ export default function CapturaChat() {
     { id: "sys-1", role: "system", text: "Hola. Escribe un gasto como: 230 uber o 140 autolavado a 3 MSI.", time: nowTimeLabel() }
   ]);
   const [text, setText] = useState("");
-  const [flow, dispatch] = useReducer(captureFlowReducer, undefined, createInitialCaptureState);
+  const [draft, setDraft] = useState(null);
+  const [isLoadingDraft, setIsLoadingDraft] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [trip, setTrip] = useState(null);
   const [includeTrip, setIncludeTrip] = useState(true);
@@ -76,16 +78,18 @@ export default function CapturaChat() {
     };
   }, []);
 
-  const canConfirm = flow.phase === CAPTURA_PHASES.READY_TO_CONFIRM;
+  const canConfirm = Boolean(draft && selectedPaymentMethod && !isSaving);
   const paymentMethodButtons = useMemo(() => paymentMethods, [paymentMethods]);
 
   async function sendText(event) {
     event.preventDefault();
     const trimmed = text.trim();
-    if (!trimmed || flow.phase === CAPTURA_PHASES.LOADING_DRAFT) return;
+    if (!trimmed || isLoadingDraft) return;
 
     setMessages((current) => [...current, { id: `u-${Date.now()}`, role: "user", text: trimmed, time: nowTimeLabel() }]);
-    dispatch({ type: "submit_text_start" });
+    setIsLoadingDraft(true);
+    setDraft(null);
+    setSelectedPaymentMethod("");
 
     try {
       const res = await fetch("/api/expense-draft", {
@@ -104,24 +108,25 @@ export default function CapturaChat() {
         throw new Error(body.error || "No pude interpretar el gasto");
       }
 
-      dispatch({ type: "submit_text_success", draft: body.draft });
+      setDraft(body.draft);
       setMessages((current) => [...current, { id: `s-${Date.now()}`, role: "system", text: body.ui?.message || "Revisa y confirma.", time: nowTimeLabel() }]);
       setText("");
     } catch (error) {
-      dispatch({ type: "submit_text_error", message: error.message });
       setMessages((current) => [...current, { id: `e-${Date.now()}`, role: "system", text: error.message || "No pude interpretar el gasto.", time: nowTimeLabel() }]);
+    } finally {
+      setIsLoadingDraft(false);
     }
   }
 
   async function confirmExpense() {
-    if (!flow.draft || !flow.selectedPaymentMethod || !canConfirm) return;
+    if (!draft || !selectedPaymentMethod) return;
 
-    dispatch({ type: "confirm_start" });
+    setIsSaving(true);
     try {
       const res = await fetch("/api/expenses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildConfirmPayload(flow.draft, flow.selectedPaymentMethod))
+        body: JSON.stringify(buildConfirmPayload(draft, selectedPaymentMethod))
       });
 
       const body = await res.json();
@@ -129,17 +134,14 @@ export default function CapturaChat() {
         throw new Error(body.error || "No se pudo guardar");
       }
 
-      dispatch({ type: "confirm_success" });
       setMessages((current) => [...current, { id: `ok-${Date.now()}`, role: "system", text: "✅ Guardado", time: nowTimeLabel() }]);
+      setDraft(null);
+      setSelectedPaymentMethod("");
     } catch (error) {
-      dispatch({ type: "confirm_error", message: error.message });
       setMessages((current) => [...current, { id: `save-${Date.now()}`, role: "system", text: error.message || "No se pudo guardar", time: nowTimeLabel() }]);
+    } finally {
+      setIsSaving(false);
     }
-  }
-
-  function cancelDraft() {
-    dispatch({ type: "cancel" });
-    setText("");
   }
 
   return (
@@ -174,14 +176,14 @@ export default function CapturaChat() {
         </button>
       </div>
 
-      {flow.draft ? (
+      {draft ? (
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
           <p className="font-semibold text-slate-900">Confirma el gasto</p>
-          <p className="mt-1 text-slate-700">Monto: {formatMoney(flow.draft.original_amount, flow.draft.original_currency)}</p>
-          <p className="text-slate-700">Monto MXN: {formatMoney(flow.draft.amount_mxn, "MXN")}</p>
-          <p className="text-slate-700">Fecha: {flow.draft.purchase_date}</p>
-          <p className="text-slate-700">Descripción: {flow.draft.description || "-"}</p>
-          <p className="text-slate-700">MSI: {flow.draft.is_msi ? `${flow.draft.msi_months || "?"} meses` : "No"}</p>
+          <p className="mt-1 text-slate-700">Monto: {formatMoney(draft.original_amount, draft.original_currency)}</p>
+          <p className="text-slate-700">Monto MXN: {formatMoney(draft.amount_mxn, "MXN")}</p>
+          <p className="text-slate-700">Fecha: {draft.purchase_date}</p>
+          <p className="text-slate-700">Descripción: {draft.description || "-"}</p>
+          <p className="text-slate-700">MSI: {draft.is_msi ? `${draft.msi_months} meses` : "No"}</p>
 
           <div className="mt-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Método de pago</p>
@@ -191,8 +193,8 @@ export default function CapturaChat() {
                   <button
                     key={method}
                     type="button"
-                    className={`rounded-full border px-3 py-1.5 text-xs ${flow.selectedPaymentMethod === method ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}
-                    onClick={() => dispatch({ type: "select_payment_method", paymentMethod: method })}
+                    className={`rounded-full border px-3 py-1.5 text-xs ${selectedPaymentMethod === method ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}
+                    onClick={() => setSelectedPaymentMethod(method)}
                   >
                     {method}
                   </button>
@@ -203,26 +205,9 @@ export default function CapturaChat() {
             )}
           </div>
 
-          {draftNeedsMsiMonths(flow.draft) && flow.selectedPaymentMethod ? (
-            <div className="mt-3">
-              <label htmlFor="msi-months" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Meses MSI</label>
-              <input
-                id="msi-months"
-                type="number"
-                min="1"
-                step="1"
-                value={flow.draft.msi_months ?? ""}
-                onChange={(event) => dispatch({ type: "set_msi_months", months: event.target.value })}
-                className="w-32 rounded border border-slate-300 px-2 py-1 text-xs"
-                placeholder="Ej: 3"
-              />
-              <p className="mt-1 text-xs text-slate-500">Indica cuántos meses son para poder confirmar.</p>
-            </div>
-          ) : null}
-
           <div className="mt-4 flex gap-2">
             <button disabled={!canConfirm} type="button" onClick={confirmExpense} className="rounded bg-emerald-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">Confirmar</button>
-            <button type="button" onClick={cancelDraft} className="rounded border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700">Cancelar</button>
+            <button type="button" onClick={() => { setDraft(null); setSelectedPaymentMethod(""); }} className="rounded border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700">Cancelar</button>
           </div>
         </div>
       ) : null}
@@ -235,7 +220,7 @@ export default function CapturaChat() {
           value={text}
           onChange={(event) => setText(event.target.value)}
         />
-        <button type="submit" disabled={flow.phase === CAPTURA_PHASES.LOADING_DRAFT} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">Enviar</button>
+        <button type="submit" disabled={isLoadingDraft} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">Enviar</button>
       </form>
     </section>
   );
