@@ -23,7 +23,14 @@ function requiredEnv(name) {
 
 function parseISODate(value) {
   if (!value) return "";
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  const normalized = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
+
+  const dmyMatch = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!dmyMatch) return "";
+
+  const [, day, month, year] = dmyMatch;
+  return `${year}-${month}-${day}`;
 }
 
 function parseIsMsi(value) {
@@ -104,12 +111,12 @@ async function fetchExpensesByUserId({ userId, filters, queryFn = defaultQueryFn
   };
 
   if (filters.from) {
-    conditions.push("purchase_date >= DATE(@from_date)");
+    conditions.push("DATE(purchase_date) >= DATE(@from_date)");
     params.from_date = filters.from;
   }
 
   if (filters.to) {
-    conditions.push("purchase_date <= DATE(@to_date)");
+    conditions.push("DATE(purchase_date) <= DATE(@to_date)");
     params.to_date = filters.to;
   }
 
@@ -139,10 +146,10 @@ async function fetchExpensesByUserId({ userId, filters, queryFn = defaultQueryFn
 
   if (filters.cursor) {
     conditions.push(`(
-      purchase_date < DATE(@cursor_purchase_date)
-      OR (purchase_date = DATE(@cursor_purchase_date) AND created_at < TIMESTAMP(@cursor_created_at))
+      DATE(purchase_date) < DATE(@cursor_purchase_date)
+      OR (DATE(purchase_date) = DATE(@cursor_purchase_date) AND created_at < TIMESTAMP(@cursor_created_at))
       OR (
-        purchase_date = DATE(@cursor_purchase_date)
+        DATE(purchase_date) = DATE(@cursor_purchase_date)
         AND created_at = TIMESTAMP(@cursor_created_at)
         AND CAST(id AS STRING) < @cursor_id
       )
@@ -155,7 +162,7 @@ async function fetchExpensesByUserId({ userId, filters, queryFn = defaultQueryFn
   const query = `
     SELECT
       id,
-      purchase_date,
+      DATE(purchase_date) AS purchase_date,
       payment_method,
       category,
       merchant,
@@ -167,7 +174,7 @@ async function fetchExpensesByUserId({ userId, filters, queryFn = defaultQueryFn
       created_at
     FROM ${expensesTable}
     WHERE ${conditions.join("\n      AND ")}
-    ORDER BY purchase_date DESC, created_at DESC, id DESC
+    ORDER BY DATE(purchase_date) DESC, created_at DESC, id DESC
     LIMIT @limit_plus_one
   `;
 
@@ -189,11 +196,11 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
   };
 
   if (filters.from) {
-    conditions.push("purchase_date >= DATE(@from_date)");
+    conditions.push("DATE(purchase_date) >= DATE(@from_date)");
     params.from_date = filters.from;
   }
   if (filters.to) {
-    conditions.push("purchase_date <= DATE(@to_date)");
+    conditions.push("DATE(purchase_date) <= DATE(@to_date)");
     params.to_date = filters.to;
   }
   if (filters.paymentMethod) {
@@ -220,7 +227,7 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
   const query = `
     SELECT
       id,
-      purchase_date,
+      DATE(purchase_date) AS purchase_date,
       payment_method,
       category,
       merchant,
@@ -232,6 +239,7 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
       created_at
     FROM ${expensesTable}
     WHERE ${conditions.join("\n      AND ")}
+    ORDER BY DATE(purchase_date) DESC, created_at DESC, id DESC
   `;
 
   const [rows] = await queryFn({ query, params });
