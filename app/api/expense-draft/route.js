@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
 import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
-import { parseExpenseText } from "../../../lib/expense_draft.js";
+import { parseExpenseTextWithCore } from "../../../lib/finclaro_core_bridge.js";
 import { convertToMxn } from "../../../lib/fx/frankfurter.js";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,8 @@ export async function handleExpenseDraftPost(
     getSession = () => getServerSession(getAuthOptions()),
     queryFn,
     fxConverter = convertToMxn,
-    now = new Date()
+    now = new Date(),
+    parseDraft = parseExpenseTextWithCore
   } = {}
 ) {
   try {
@@ -30,7 +31,7 @@ export async function handleExpenseDraftPost(
     const tripId = includeTrip ? String(payload?.trip_id || "").trim() : "";
     const tripCurrency = includeTrip ? normalizeCurrency(payload?.trip_base_currency || "") : "";
 
-    const parsed = parseExpenseText(text, { now });
+    const parsed = await parseDraft(text, { now });
     if (parsed.error) {
       return Response.json({ error: parsed.error }, { status: 400 });
     }

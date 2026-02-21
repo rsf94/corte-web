@@ -105,3 +105,51 @@ test("POST /api/expense-draft texto con moneda usa fx", async () => {
     restore();
   }
 });
+
+
+test("POST /api/expense-draft usa parser del core cuando está disponible", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  let parserCalls = 0;
+
+  try {
+    const { handleExpenseDraftPost } = await import("../app/api/expense-draft/route.js");
+    const req = new Request("http://localhost:3000/api/expense-draft", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "Starbucks 120" })
+    });
+
+    const response = await handleExpenseDraftPost(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => identityResolverQuery(query, { userId: "user-123" }),
+      parseDraft: async (text, { now }) => {
+        parserCalls += 1;
+        assert.equal(text, "Starbucks 120");
+        assert.ok(now instanceof Date);
+        return {
+          error: "",
+          parsed: {
+            raw_text: "Starbucks 120",
+            purchase_date: "2026-01-10",
+            original_amount: 120,
+            detected_currency: "",
+            description: "Starbucks",
+            merchant: "Starbucks",
+            category: "General",
+            is_msi: false,
+            msi_months: null
+          }
+        };
+      },
+      now: new Date("2026-01-10T12:00:00.000Z")
+    });
+
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(parserCalls, 1);
+    assert.equal(body.draft.original_amount, 120);
+    assert.equal(body.draft.description, "Starbucks");
+  } finally {
+    restore();
+  }
+});
