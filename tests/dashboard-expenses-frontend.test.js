@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
 
-import { buildExpensesQueryParams, getDefaultExpensesDateRange } from "../lib/dashboard_expenses.js";
+import { buildExpensesQueryParams, getDefaultExpensesDateRange, normalizeDateForApi } from "../lib/dashboard_expenses.js";
 
 test("expenses default date range uses last 30 days", () => {
   const base = new Date("2026-05-18T10:00:00.000Z");
@@ -33,6 +33,26 @@ test("expenses query params include filters and omit is_msi when set to all", ()
   assert.equal(params.get("limit"), "50");
 });
 
+
+
+test("expenses query params normalize dd/mm/yyyy to yyyy-mm-dd", () => {
+  assert.equal(normalizeDateForApi("21/01/2026"), "2026-01-21");
+
+  const params = buildExpensesQueryParams(
+    {
+      from: "21/01/2026",
+      to: "20/02/2026",
+      payment_method: "",
+      category: "",
+      q: "",
+      is_msi: "all"
+    },
+    { limit: 50 }
+  );
+
+  assert.equal(params.get("from"), "2026-01-21");
+  assert.equal(params.get("to"), "2026-02-20");
+});
 test("expenses explorer renders filtros tabla y paginación", async () => {
   const source = await fs.readFile(new URL("../app/dashboard/expenses/expenses-explorer.js", import.meta.url), "utf8");
   const filtersSource = await fs.readFile(new URL("../app/dashboard/expenses/expenses-filters.js", import.meta.url), "utf8");
@@ -49,6 +69,14 @@ test("expenses explorer renders filtros tabla y paginación", async () => {
   assert.match(tableSource, /Meses MSI/);
 });
 
+
+
+test("expenses explorer resets pagination when applying filters", async () => {
+  const source = await fs.readFile(new URL("../app/dashboard/expenses/expenses-explorer.js", import.meta.url), "utf8");
+
+  assert.match(source, /setNextCursor\(""\);/);
+  assert.match(source, /runFetch\(\{ append: false, cursor: "", filters: \{ \.\.\.draft \} \}\);/);
+});
 test("captura chat smoke usa flujo draft y confirmación", async () => {
   const source = await fs.readFile(new URL("../app/dashboard/captura/captura-chat.js", import.meta.url), "utf8");
 

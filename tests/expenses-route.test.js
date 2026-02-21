@@ -196,8 +196,39 @@ test("GET /api/expenses usa @user_id y no usa chat_id de querystring", async () 
 
     assert.equal(response.status, 200);
     assert.match(expensesQuery, /user_id = @user_id/);
+    assert.match(expensesQuery, /DATE\(purchase_date\) <= DATE\(@to_date\)/);
+    assert.match(expensesQuery, /ORDER BY DATE\(purchase_date\) DESC, created_at DESC, id DESC/);
     assert.doesNotMatch(expensesQuery, /chat_id = @chat_id/);
     assert.equal(expensesParams.user_id, "user-xyz");
+    assert.equal(expensesParams.to_date, "2024-06-30");
+  } finally {
+    restore();
+  }
+});
+
+test("GET /api/expenses ordena por purchase_date DESC y created_at DESC como desempate", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?from=2024-06-01&to=2024-06-30&limit=5");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        return [[
+          { id: "1", purchase_date: "2024-06-20", created_at: "2024-06-20T09:00:00.000Z", amount_mxn: 1 },
+          { id: "2", purchase_date: "2024-06-20", created_at: "2024-06-20T10:00:00.000Z", amount_mxn: 1 },
+          { id: "3", purchase_date: "2024-06-19", created_at: "2024-06-19T12:00:00.000Z", amount_mxn: 1 }
+        ]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.items.map((item) => item.id), ["2", "1", "3"]);
   } finally {
     restore();
   }
@@ -228,6 +259,156 @@ test("GET /api/expenses con fallback usa chat_links y legacy chat_id", async () 
     assert.equal(response.status, 200);
     assert.ok(queries.some((entry) => entry.query.includes("FROM `project.dataset.chat_links`")));
     assert.ok(queries.some((entry) => entry.query.includes("chat_id = @chat_id") && entry.query.includes("user_id IS NULL")));
+  } finally {
+    restore();
+  }
+});
+
+
+
+
+
+
+test("GET /api/expenses mezcla primary + legacy aun sin ENABLE_LEGACY_CHAT_FALLBACK", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset", ENABLE_LEGACY_CHAT_FALLBACK: "" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?from=2026-01-21&to=2026-02-20&limit=50");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz", chatId: "chat-legacy" });
+        if (resolved) return resolved;
+
+        if (query.includes("user_id = @user_id")) {
+          return [[{ id: "p1", purchase_date: "2026-02-14", created_at: "2026-02-14T12:00:00.000Z", amount_mxn: 10 }]];
+        }
+
+        if (query.includes("chat_id = @chat_id") && query.includes("user_id IS NULL")) {
+          return [[{ id: "l1", purchase_date: "2026-02-20", created_at: "2026-02-20T12:00:00.000Z", amount_mxn: 20 }]];
+        }
+
+        return [[]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.items.map((item) => item.id), ["l1", "p1"]);
+  } finally {
+    restore();
+  }
+});
+test("GET /api/expenses con fallback habilitado mezcla primary + legacy (evita corte por fuente)", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset", ENABLE_LEGACY_CHAT_FALLBACK: "true" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?from=2026-01-21&to=2026-02-20&limit=50");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz", chatId: "chat-legacy" });
+        if (resolved) return resolved;
+
+        if (query.includes("user_id = @user_id")) {
+          return [[
+            { id: "p1", purchase_date: "2026-02-14", created_at: "2026-02-14T12:00:00.000Z", amount_mxn: 10 }
+          ]];
+        }
+
+        if (query.includes("chat_id = @chat_id") && query.includes("user_id IS NULL")) {
+          return [[
+            { id: "l1", purchase_date: "2026-02-20", created_at: "2026-02-20T12:00:00.000Z", amount_mxn: 20 }
+          ]];
+        }
+
+        return [[]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.items.map((item) => item.id), ["l1", "p1"]);
+  } finally {
+    restore();
+  }
+});
+test("GET /api/expenses acepta fechas dd/mm/yyyy y las convierte a ISO", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  let expensesParams = {};
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?from=21/01/2026&to=20/02/2026&limit=2");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        expensesParams = params;
+        return [[{ id: "1", purchase_date: "2026-02-20", created_at: "2026-02-20T10:00:00.000Z", amount_mxn: 1 }]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(expensesParams.from_date, "2026-01-21");
+    assert.equal(expensesParams.to_date, "2026-02-20");
+  } finally {
+    restore();
+  }
+});
+
+test("GET /api/expenses pagination usa next_cursor para traer la página siguiente sin repetir", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+
+    const firstResponse = await handleExpensesGet(new Request("http://localhost:3000/api/expenses?from=2026-01-01&to=2026-02-20&limit=2"), {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        if (!params.cursor_id) {
+          return [[
+            { id: "a", purchase_date: "2026-02-20", created_at: "2026-02-20T10:00:00.000Z", amount_mxn: 1 },
+            { id: "b", purchase_date: "2026-02-19", created_at: "2026-02-19T10:00:00.000Z", amount_mxn: 1 },
+            { id: "c", purchase_date: "2026-02-18", created_at: "2026-02-18T10:00:00.000Z", amount_mxn: 1 }
+          ]];
+        }
+        return [[
+          { id: "c", purchase_date: "2026-02-18", created_at: "2026-02-18T10:00:00.000Z", amount_mxn: 1 }
+        ]];
+      }
+    });
+
+    const firstBody = await firstResponse.json();
+    assert.equal(firstResponse.status, 200);
+    assert.deepEqual(firstBody.items.map((item) => item.id), ["a", "b"]);
+    assert.ok(firstBody.next_cursor);
+
+    const secondResponse = await handleExpensesGet(new Request(`http://localhost:3000/api/expenses?from=2026-01-01&to=2026-02-20&limit=2&cursor=${firstBody.next_cursor}`), {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        assert.equal(params.cursor_purchase_date, "2026-02-19");
+        assert.equal(params.cursor_id, "b");
+        return [[
+          { id: "c", purchase_date: "2026-02-18", created_at: "2026-02-18T10:00:00.000Z", amount_mxn: 1 }
+        ]];
+      }
+    });
+
+    const secondBody = await secondResponse.json();
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual(secondBody.items.map((item) => item.id), ["c"]);
+    assert.equal(secondBody.next_cursor, null);
   } finally {
     restore();
   }

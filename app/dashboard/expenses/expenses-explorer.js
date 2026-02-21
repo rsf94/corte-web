@@ -84,6 +84,8 @@ export default function ExpensesExplorer() {
         isLoading={isLoading}
         onDraftChange={(field, value) => setDraft((current) => ({ ...current, [field]: value }))}
         onApply={() => {
+          setItems([]);
+          setNextCursor("");
           setActiveFilters({ ...draft });
           runFetch({ append: false, cursor: "", filters: { ...draft } });
         }}
