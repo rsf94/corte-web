@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CAPTURA_PHASES, captureFlowReducer, createInitialCaptureState } from "../../../lib/captura_flow.js";
 import {
@@ -31,93 +32,98 @@ function buildConfirmPayload(draft, selectedPaymentMethod, includeTrip) {
 }
 
 function buildDraftSummary(draft, selectedPaymentMethod) {
-  const rows = [
+  return [
     `Monto: ${formatMoney(draft.original_amount, draft.original_currency)}`,
     `MXN: ${formatMoney(draft.amount_mxn, "MXN")}`,
     `Descripción: ${draft.description || "-"}`,
     `Método: ${selectedPaymentMethod || "pendiente"}`,
     `MSI: ${draft.is_msi ? `${draft.msi_months || "?"} meses` : "No"}`
-  ];
-  return rows.join("\n");
+  ].join("\n");
 }
 
 export default function CapturaChat() {
-  const [messages, setMessages] = useState([
-    createWelcomeMessage()
-  ]);
+  const [messages, setMessages] = useState([createWelcomeMessage()]);
   const [text, setText] = useState("");
   const [flow, dispatch] = useReducer(captureFlowReducer, undefined, createInitialCaptureState);
   const [methods, setMethods] = useState([]);
   const [trip, setTrip] = useState(null);
   const [hasActiveTrip, setHasActiveTrip] = useState(false);
   const [contextSourceCounts, setContextSourceCounts] = useState({ user: 0, chat: 0, merged: 0 });
-  const [includeTrip, setIncludeTrip] = useState(true);
+  const [includeTrip, setIncludeTrip] = useState(false);
   const chatBodyRef = useRef(null);
+  const draftRequestRef = useRef(null);
+  const requestIdRef = useRef(0);
+  const phaseRef = useRef(flow.phase);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    dispatch({ type: "load_context_start" });
 
     async function loadContext() {
       try {
-        const res = await fetch("/api/expense-capture-context", { method: "GET", cache: "no-store" });
-        if (!res.ok) return;
+        const res = await fetch("/api/expense-capture-context", { method: "GET", cache: "no-store", signal: controller.signal });
+        if (!res.ok) throw new Error("No pude cargar contexto");
         const body = await res.json();
-        if (cancelled) return;
-
         const contextMethods = Array.isArray(body.methods) ? body.methods : [];
-        setMethods(contextMethods);
         const sourceCounts = {
           user: Number(body?.defaults?.source_counts?.user ?? 0),
           chat: Number(body?.defaults?.source_counts?.chat ?? 0),
           merged: Number(body?.defaults?.source_counts?.merged ?? contextMethods.length)
         };
-        setContextSourceCounts(sourceCounts);
         const activeTrip = body.active_trip ?? null;
         const backendHasTrip = Boolean(body.hasTrip || body.activeTripId || activeTrip?.id);
+
+        setMethods(contextMethods);
+        setContextSourceCounts(sourceCounts);
         setTrip(activeTrip);
         setHasActiveTrip(backendHasTrip);
         setIncludeTrip(backendHasTrip);
+        dispatch({ type: "load_context_done" });
+
         logCaptureDecision("context_loaded", {
           phase: flow.phase,
           draft: flow.draft,
           hasTrip: backendHasTrip,
-          activeTripId: body.activeTripId || activeTrip?.id || "",
+          activeTripId: backendHasTrip ? (body.activeTripId || activeTrip?.id || "") : "",
           methodsCount: contextMethods.length,
           sourceCounts,
-          selectedMethodId: flow.selectedPaymentMethod
+          selectedMethodLabel: flow.selectedPaymentMethod
         });
       } catch {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
+          dispatch({ type: "load_context_done" });
           setMessages((current) => [...current, { id: `ctx-${Date.now()}`, role: "system", text: "No pude cargar contexto. Puedes seguir capturando.", time: nowTimeLabel() }]);
         }
       }
     }
 
     loadContext();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
     chatBodyRef.current?.scrollTo({ top: chatBodyRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, flow.phase]);
 
-  const methodButtons = useMemo(() => methods.map((method) => method.label), [methods]);
-
   useEffect(() => {
-    logCaptureDecision("phase_changed", {
-      phase: flow.phase,
-      draft: flow.draft,
-      hasTrip: hasActiveTrip,
-      activeTripId: trip?.id || "",
-      methodsCount: methods.length,
-      sourceCounts: contextSourceCounts,
-      selectedMethodId: flow.selectedPaymentMethod
-    });
+    const previous = phaseRef.current;
+    if (previous !== flow.phase) {
+      logCaptureDecision("state_transition", {
+        transition: `${previous}->${flow.phase}`,
+        phase: flow.phase,
+        draft: flow.draft,
+        hasTrip: hasActiveTrip,
+        activeTripId: hasActiveTrip ? (trip?.id || "") : "",
+        sourceCounts: contextSourceCounts,
+        methodsCount: methods.length,
+        selectedMethodLabel: flow.selectedPaymentMethod
+      });
+      phaseRef.current = flow.phase;
+    }
   }, [contextSourceCounts, flow.draft, flow.phase, flow.selectedPaymentMethod, hasActiveTrip, methods.length, trip]);
 
-  const showTripQuickReplies = shouldShowTripQuickReplies({ draft: flow.draft, hasActiveTrip });
+  const methodButtons = useMemo(() => methods.map((method) => method.label), [methods]);
+  const showTripQuickReplies = hasActiveTrip && shouldShowTripQuickReplies({ draft: flow.draft, hasActiveTrip });
   const canPickMethod = Boolean(flow.draft) && flow.phase !== CAPTURA_PHASES.LOADING_DRAFT && flow.phase !== CAPTURA_PHASES.SAVING;
   const shouldShowMethodEmpty = Boolean(flow.draft) && methodButtons.length === 0;
   const canSend = flow.phase !== CAPTURA_PHASES.LOADING_DRAFT && flow.phase !== CAPTURA_PHASES.SAVING;
@@ -127,9 +133,14 @@ export default function CapturaChat() {
     const trimmed = text.trim();
     if (!trimmed || !canSend) return;
 
+    if (draftRequestRef.current) draftRequestRef.current.abort();
+    const controller = new AbortController();
+    draftRequestRef.current = controller;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+
     setMessages((current) => [...current, { id: `u-${Date.now()}`, role: "user", text: trimmed, time: nowTimeLabel() }]);
     setText("");
-    const requestIncludeTrip = hasActiveTrip ? includeTrip : false;
     setIncludeTrip(hasActiveTrip);
     dispatch({ type: "submit_text_start" });
 
@@ -137,35 +148,37 @@ export default function CapturaChat() {
       const res = await fetch("/api/expense-draft", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           text: trimmed,
-          include_trip: requestIncludeTrip,
-          trip_id: requestIncludeTrip ? trip?.id : "",
-          trip_base_currency: requestIncludeTrip ? trip?.base_currency : ""
+          include_trip: hasActiveTrip,
+          trip_id: hasActiveTrip ? trip?.id : "",
+          trip_base_currency: hasActiveTrip ? trip?.base_currency : ""
         })
       });
 
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "No pude interpretar el gasto");
+      if (requestId !== requestIdRef.current) return;
 
-      dispatch({ type: "submit_text_success", draft: body.draft });
-      if (body.draft?.trip_id) setIncludeTrip(true);
-      const match = resolveDraftMethod(body.draft, methods);
+      const normalizedDraft = hasActiveTrip ? body.draft : { ...body.draft, trip_id: null };
+      dispatch({ type: "submit_text_success", draft: normalizedDraft });
+
+      const match = resolveDraftMethod(normalizedDraft, methods);
       if (match.selectedMethod) dispatch({ type: "select_payment_method", paymentMethod: match.selectedMethod });
 
-      const hint = createMethodHint(match);
+      setMessages((current) => [...current, { id: `sys-${Date.now()}`, role: "system", text: createMethodHint(match), time: nowTimeLabel() }]);
       logCaptureDecision("draft_parsed", {
         phase: match.selectedMethod ? CAPTURA_PHASES.READY_TO_CONFIRM : CAPTURA_PHASES.AWAITING_PAYMENT_METHOD,
-        draft: body.draft,
+        draft: normalizedDraft,
         hasTrip: hasActiveTrip,
-        activeTripId: trip?.id || "",
+        activeTripId: hasActiveTrip ? (trip?.id || "") : "",
         methodsCount: methods.length,
         sourceCounts: contextSourceCounts,
-        selectedMethodId: match.selectedMethod
+        selectedMethodLabel: match.selectedMethod
       });
-
-      setMessages((current) => [...current, { id: `sys-${Date.now()}`, role: "system", text: hint, time: nowTimeLabel() }]);
     } catch (error) {
+      if (controller.signal.aborted) return;
       dispatch({ type: "submit_text_error", message: error.message });
       setMessages((current) => [...current, { id: `err-${Date.now()}`, role: "system", text: error.message || "No pude interpretar el gasto.", time: nowTimeLabel() }]);
     }
@@ -173,14 +186,13 @@ export default function CapturaChat() {
 
   async function confirmExpense() {
     if (!flow.draft || !flow.selectedPaymentMethod || flow.phase !== CAPTURA_PHASES.READY_TO_CONFIRM) return;
-
     dispatch({ type: "confirm_start" });
 
     try {
       const res = await fetch("/api/expenses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildConfirmPayload(flow.draft, flow.selectedPaymentMethod, includeTrip))
+        body: JSON.stringify(buildConfirmPayload(flow.draft, flow.selectedPaymentMethod, hasActiveTrip && includeTrip))
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "No se pudo guardar");
@@ -188,16 +200,7 @@ export default function CapturaChat() {
       dispatch({ type: "confirm_success" });
       setIncludeTrip(hasActiveTrip);
       setMessages((current) => [...current, { id: `done-${Date.now()}`, role: "system", text: "Guardado ✅", time: nowTimeLabel() }]);
-      dispatch({ type: "reset_after_done" });
-      logCaptureDecision("expense_saved", {
-        phase: CAPTURA_PHASES.DONE,
-        draft: flow.draft,
-        hasTrip: hasActiveTrip,
-        activeTripId: trip?.id || "",
-        methodsCount: methods.length,
-        sourceCounts: contextSourceCounts,
-        selectedMethodId: flow.selectedPaymentMethod
-      });
+      setTimeout(() => dispatch({ type: "reset_after_done" }), 1000);
     } catch (error) {
       dispatch({ type: "confirm_error", message: error.message });
       setMessages((current) => [...current, { id: `save-${Date.now()}`, role: "system", text: error.message || "No se pudo guardar", time: nowTimeLabel() }]);
@@ -205,46 +208,11 @@ export default function CapturaChat() {
   }
 
   function cancelDraft() {
+    if (draftRequestRef.current) draftRequestRef.current.abort();
+    requestIdRef.current += 1;
     dispatch({ type: "cancel" });
     setIncludeTrip(hasActiveTrip);
     setMessages((current) => [...current, { id: `cancel-${Date.now()}`, role: "system", text: "Cancelado.", time: nowTimeLabel() }]);
-  }
-
-  function selectPaymentMethod(method) {
-    dispatch({ type: "select_payment_method", paymentMethod: method });
-    logCaptureDecision("payment_method_selected", {
-      phase: flow.phase,
-      draft: flow.draft,
-      hasTrip: hasActiveTrip,
-      activeTripId: trip?.id || "",
-      methodsCount: methods.length,
-      sourceCounts: contextSourceCounts,
-      selectedMethodId: method
-    });
-  }
-
-  function setMsiMonths(months) {
-    dispatch({ type: "set_msi_months", months: String(months) });
-    setMessages((current) => [...current, { id: `msi-${Date.now()}`, role: "user", text: `${months} meses`, time: nowTimeLabel() }]);
-    logCaptureDecision("msi_months_selected", {
-      phase: flow.phase,
-      draft: { ...(flow.draft || {}), msi_months: Number(months) },
-      hasTrip: hasActiveTrip,
-      activeTripId: trip?.id || "",
-      methodsCount: methods.length,
-      sourceCounts: contextSourceCounts,
-      selectedMethodId: flow.selectedPaymentMethod
-    });
-  }
-
-  function selectTripChoice(nextIncludeTrip) {
-    setIncludeTrip(nextIncludeTrip);
-    setMessages((current) => [...current, {
-      id: `trip-${Date.now()}`,
-      role: "user",
-      text: nextIncludeTrip ? "Es del viaje" : "No es del viaje",
-      time: nowTimeLabel()
-    }]);
   }
 
   return (
@@ -271,20 +239,8 @@ export default function CapturaChat() {
           <div className="space-y-1">
             <p className="text-xs text-slate-600">¿Este gasto pertenece al viaje activo?</p>
             <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className={`rounded-full px-3 py-1.5 text-xs ${includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}
-                onClick={() => selectTripChoice(true)}
-              >
-                Es del viaje
-              </button>
-              <button
-                type="button"
-                className={`rounded-full px-3 py-1.5 text-xs ${!includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}
-                onClick={() => selectTripChoice(false)}
-              >
-                No es del viaje
-              </button>
+              <button type="button" className={`rounded-full px-3 py-1.5 text-xs ${includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`} onClick={() => setIncludeTrip(true)}>Es del viaje</button>
+              <button type="button" className={`rounded-full px-3 py-1.5 text-xs ${!includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`} onClick={() => setIncludeTrip(false)}>No es del viaje</button>
             </div>
           </div>
         ) : null}
@@ -292,18 +248,15 @@ export default function CapturaChat() {
         {flow.draft ? (
           <div className="flex flex-wrap gap-2">
             {methodButtons.map((method) => (
-              <button
-                key={method}
-                type="button"
-                className={`rounded-full border px-3 py-1.5 text-xs ${flow.selectedPaymentMethod === method ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white"}`}
-                onClick={() => selectPaymentMethod(method)}
-                disabled={!canPickMethod}
-              >
-                {method}
-              </button>
+              <button key={method} type="button" className={`rounded-full border px-3 py-1.5 text-xs ${flow.selectedPaymentMethod === method ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white"}`} onClick={() => dispatch({ type: "select_payment_method", paymentMethod: method })} disabled={!canPickMethod}>{method}</button>
             ))}
 
-            {shouldShowMethodEmpty ? <p className="text-xs text-slate-600">No hay métodos de pago disponibles. Vincula al menos uno para confirmar.</p> : null}
+            {shouldShowMethodEmpty ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <p>No encontramos métodos de pago. Crea tus cuentas primero.</p>
+                <Link className="mt-1 inline-block font-semibold underline" href="/dashboard">Ir a /dashboard</Link>
+              </div>
+            ) : null}
 
             {(flow.phase === CAPTURA_PHASES.AWAITING_PAYMENT_METHOD || flow.phase === CAPTURA_PHASES.AWAITING_MSI_MONTHS || flow.phase === CAPTURA_PHASES.READY_TO_CONFIRM) ? (
               <button type="button" onClick={cancelDraft} className="rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">Cancelar</button>
@@ -316,9 +269,7 @@ export default function CapturaChat() {
             <p className="text-xs text-slate-600">¿A cuántos meses?</p>
             <div className="flex flex-wrap gap-2">
               {[3, 6, 9, 12].map((months) => (
-                <button key={months} type="button" className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs" onClick={() => setMsiMonths(months)}>
-                  {months}
-                </button>
+                <button key={months} type="button" className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs" onClick={() => dispatch({ type: "set_msi_months", months: String(months) })}>{months}</button>
               ))}
             </div>
           </div>
@@ -333,13 +284,7 @@ export default function CapturaChat() {
       </div>
 
       <form onSubmit={sendText} className="mt-3 flex gap-2">
-        <input
-          type="text"
-          className="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm"
-          placeholder="Ejemplo: 230 uber"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-        />
+        <input type="text" className="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm" placeholder="Ejemplo: 230 uber" value={text} onChange={(event) => setText(event.target.value)} />
         <button type="submit" disabled={!canSend} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">Enviar</button>
       </form>
     </section>

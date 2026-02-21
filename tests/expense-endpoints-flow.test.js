@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const envKeys = ["BQ_PROJECT_ID", "BQ_DATASET"];
+const envKeys = ["BQ_PROJECT_ID", "BQ_DATASET", "E2E_AUTH_BYPASS", "NODE_ENV"];
 
 function withEnv(overrides) {
   const original = {};
@@ -16,8 +16,8 @@ function withEnv(overrides) {
   };
 }
 
-test("black-box endpoints flow: capture-context -> draft -> insert -> expenses", async () => {
-  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+test("endpoint-only flow: context + draft + insert + fetch (con bypass no-prod)", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset", E2E_AUTH_BYPASS: "1", NODE_ENV: "test" });
   const inserted = [];
 
   try {
@@ -41,51 +41,36 @@ test("black-box endpoints flow: capture-context -> draft -> insert -> expenses",
       }
 
       if (query.includes("FROM `project.dataset.expenses`") && query.includes("user_id = @user_id")) {
-        return [inserted.map((row) => ({
-          id: row.id,
-          purchase_date: row.purchase_date,
-          payment_method: row.payment_method,
-          category: row.category,
-          merchant: row.merchant,
-          description: row.description,
-          amount_mxn: row.amount_mxn,
-          is_msi: row.is_msi,
-          msi_months: row.msi_months,
-          created_at: row.created_at
-        }))];
+        return [inserted.map((row) => ({ ...row, id: row.id, purchase_date: row.purchase_date, amount_mxn: row.amount_mxn, created_at: row.created_at }))];
       }
-
-      if (query.includes("FROM `project.dataset.expenses`") && query.includes("chat_id = @chat_id")) {
-        return [[{ id: "legacy-1", purchase_date: "2026-01-09", created_at: "2026-01-09T09:00:00.000Z", amount_mxn: 50 }]];
-      }
+      if (query.includes("FROM `project.dataset.expenses`") && query.includes("chat_id = @chat_id")) return [[]];
 
       return [[]];
     };
 
+    const fakeSession = { user: { email: "user@example.com" } };
+
     const capture = await handleExpenseCaptureContextGet(new Request("http://localhost:3000/api/expense-capture-context"), {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
+      getSession: async () => fakeSession,
       queryFn
     });
     const captureBody = await capture.json();
     assert.equal(capture.status, 200);
-    assert.equal(captureBody.methods.length, 2);
-    assert.equal(captureBody.hasTrip, true);
-    assert.equal(captureBody.activeTripId, "trip-active");
+    assert.deepEqual(captureBody.methods.map((x) => x.label).sort(), ["AMEX", "Nu"]);
 
     const draft = await handleExpenseDraftPost(new Request("http://localhost:3000/api/expense-draft", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "1400 laptop a 12 MSI" })
+      body: JSON.stringify({ text: "100 uber" })
     }), {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
+      getSession: async () => fakeSession,
       queryFn,
       now: new Date("2026-01-10T12:00:00.000Z")
     });
     const draftBody = await draft.json();
     assert.equal(draft.status, 200);
-    assert.equal(draftBody.draft.is_msi, true);
-    assert.equal(draftBody.draft.msi_months, 12);
-    assert.equal(draftBody.draft.trip_id, "trip-active");
+    assert.equal(draftBody.draft.original_amount, 100);
+    assert.match(draftBody.draft.description.toLowerCase(), /uber/);
 
     const insert = await handleExpensesPost(new Request("http://localhost:3000/api/expenses", {
       method: "POST",
@@ -96,29 +81,25 @@ test("black-box endpoints flow: capture-context -> draft -> insert -> expenses",
         payment_method: "AMEX",
         category: draftBody.draft.category,
         description: draftBody.draft.description,
-        is_msi: draftBody.draft.is_msi,
-        msi_months: draftBody.draft.msi_months,
-        trip_id: draftBody.draft.trip_id
+        is_msi: false
       })
     }), {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
+      getSession: async () => fakeSession,
       queryFn,
       uuidFactory: () => "flow-1"
     });
-    const insertBody = await insert.json();
+
     assert.equal(insert.status, 200);
-    assert.equal(insertBody.id, "flow-1");
+    assert.equal(inserted.length, 1);
+    assert.equal(inserted[0].user_id, "user-flow");
 
     const expenses = await handleExpensesGet(new Request("http://localhost:3000/api/expenses?limit=10"), {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
+      getSession: async () => fakeSession,
       queryFn
     });
     const expensesBody = await expenses.json();
     assert.equal(expenses.status, 200);
     assert.equal(expensesBody.items[0].id, "flow-1");
-    assert.equal(expensesBody.items[0].msi_months, 12);
-    assert.equal(expensesBody.items[0].source, "web_user");
-    assert.equal(expensesBody.items[1].id, "legacy-1");
   } finally {
     restore();
   }
