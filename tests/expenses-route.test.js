@@ -196,8 +196,39 @@ test("GET /api/expenses usa @user_id y no usa chat_id de querystring", async () 
 
     assert.equal(response.status, 200);
     assert.match(expensesQuery, /user_id = @user_id/);
+    assert.match(expensesQuery, /DATE\(purchase_date\) <= DATE\(@to_date\)/);
+    assert.match(expensesQuery, /ORDER BY DATE\(purchase_date\) DESC, created_at DESC, id DESC/);
     assert.doesNotMatch(expensesQuery, /chat_id = @chat_id/);
     assert.equal(expensesParams.user_id, "user-xyz");
+    assert.equal(expensesParams.to_date, "2024-06-30");
+  } finally {
+    restore();
+  }
+});
+
+test("GET /api/expenses ordena por purchase_date DESC y created_at DESC como desempate", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?from=2024-06-01&to=2024-06-30&limit=5");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        return [[
+          { id: "1", purchase_date: "2024-06-20", created_at: "2024-06-20T09:00:00.000Z", amount_mxn: 1 },
+          { id: "2", purchase_date: "2024-06-20", created_at: "2024-06-20T10:00:00.000Z", amount_mxn: 1 },
+          { id: "3", purchase_date: "2024-06-19", created_at: "2024-06-19T12:00:00.000Z", amount_mxn: 1 }
+        ]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.items.map((item) => item.id), ["2", "1", "3"]);
   } finally {
     restore();
   }
