@@ -305,17 +305,13 @@ export async function handleExpensesGet(
     const filters = getFilterValues(requestUrl.searchParams);
     const primary = await fetchExpensesByUserId({ userId: authContext.user_id, filters, queryFn });
 
-    let normalized = primary;
-    if (shouldUseLegacyFallback()) {
-      const legacy = await fetchLegacyExpenses({ userId: authContext.user_id, filters, queryFn });
-      const merged = [...primary, ...legacy];
-      const deduped = new Map();
-      for (const item of merged) {
-        deduped.set(String(item.id), item);
-      }
-      normalized = Array.from(deduped.values());
+    const legacy = await fetchLegacyExpenses({ userId: authContext.user_id, filters, queryFn });
+    const merged = [...primary, ...legacy];
+    const deduped = new Map();
+    for (const item of merged) {
+      deduped.set(String(item.id), item);
     }
-    let normalized = Array.from(deduped.values());
+    const normalized = Array.from(deduped.values());
 
     normalized.sort((a, b) => {
       if (a.purchase_date !== b.purchase_date) return a.purchase_date < b.purchase_date ? 1 : -1;
