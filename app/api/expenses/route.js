@@ -24,7 +24,14 @@ function requiredEnv(name) {
 
 function parseISODate(value) {
   if (!value) return "";
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  const normalized = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
+
+  const dmyMatch = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!dmyMatch) return "";
+
+  const [, day, month, year] = dmyMatch;
+  return `${year}-${month}-${day}`;
 }
 
 function parseIsMsi(value) {

@@ -263,3 +263,81 @@ test("GET /api/expenses con fallback usa chat_links y legacy chat_id", async () 
     restore();
   }
 });
+
+
+test("GET /api/expenses acepta fechas dd/mm/yyyy y las convierte a ISO", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  let expensesParams = {};
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?from=21/01/2026&to=20/02/2026&limit=2");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        expensesParams = params;
+        return [[{ id: "1", purchase_date: "2026-02-20", created_at: "2026-02-20T10:00:00.000Z", amount_mxn: 1 }]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(expensesParams.from_date, "2026-01-21");
+    assert.equal(expensesParams.to_date, "2026-02-20");
+  } finally {
+    restore();
+  }
+});
+
+test("GET /api/expenses pagination usa next_cursor para traer la página siguiente sin repetir", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+
+    const firstResponse = await handleExpensesGet(new Request("http://localhost:3000/api/expenses?from=2026-01-01&to=2026-02-20&limit=2"), {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        if (!params.cursor_id) {
+          return [[
+            { id: "a", purchase_date: "2026-02-20", created_at: "2026-02-20T10:00:00.000Z", amount_mxn: 1 },
+            { id: "b", purchase_date: "2026-02-19", created_at: "2026-02-19T10:00:00.000Z", amount_mxn: 1 },
+            { id: "c", purchase_date: "2026-02-18", created_at: "2026-02-18T10:00:00.000Z", amount_mxn: 1 }
+          ]];
+        }
+        return [[
+          { id: "c", purchase_date: "2026-02-18", created_at: "2026-02-18T10:00:00.000Z", amount_mxn: 1 }
+        ]];
+      }
+    });
+
+    const firstBody = await firstResponse.json();
+    assert.equal(firstResponse.status, 200);
+    assert.deepEqual(firstBody.items.map((item) => item.id), ["a", "b"]);
+    assert.ok(firstBody.next_cursor);
+
+    const secondResponse = await handleExpensesGet(new Request(`http://localhost:3000/api/expenses?from=2026-01-01&to=2026-02-20&limit=2&cursor=${firstBody.next_cursor}`), {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz" });
+        if (resolved) return resolved;
+        assert.equal(params.cursor_purchase_date, "2026-02-19");
+        assert.equal(params.cursor_id, "b");
+        return [[
+          { id: "c", purchase_date: "2026-02-18", created_at: "2026-02-18T10:00:00.000Z", amount_mxn: 1 }
+        ]];
+      }
+    });
+
+    const secondBody = await secondResponse.json();
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual(secondBody.items.map((item) => item.id), ["c"]);
+    assert.equal(secondBody.next_cursor, null);
+  } finally {
+    restore();
+  }
+});
