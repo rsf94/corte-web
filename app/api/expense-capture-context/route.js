@@ -1,6 +1,7 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../../lib/e2e_auth_bypass.js";
 import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
 import { fetchLatestLinkedChatIdByUserId } from "../../../lib/identity_links.js";
 import { fetchExpenseCaptureContext } from "../../../lib/expense_capture_context.js";
@@ -16,7 +17,7 @@ const defaultQueryFn = (options) => bq.query(options);
 export async function handleExpenseCaptureContextGet(
   request,
   {
-    getSession = () => getServerSession(getAuthOptions()),
+    getSession = () => getSessionWithE2EBypass(() => getServerSession(getAuthOptions())),
     queryFn = defaultQueryFn
   } = {}
 ) {

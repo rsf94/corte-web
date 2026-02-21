@@ -2,6 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { getServerSession } from "next-auth";
 import crypto from "node:crypto";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../../lib/e2e_auth_bypass.js";
 import { fetchLatestLinkedChatIdByUserId } from "../../../lib/identity_links.js";
 import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
 import { convertToMxn } from "../../../lib/fx/frankfurter.js";
@@ -293,7 +294,7 @@ function validateExpensePayload(payload = {}) {
 export async function handleExpensesGet(
   request,
   {
-    getSession = () => getServerSession(getAuthOptions()),
+    getSession = () => getSessionWithE2EBypass(() => getServerSession(getAuthOptions())),
     queryFn = defaultQueryFn
   } = {}
 ) {
@@ -336,7 +337,7 @@ export async function handleExpensesGet(
 export async function handleExpensesPost(
   request,
   {
-    getSession = () => getServerSession(getAuthOptions()),
+    getSession = () => getSessionWithE2EBypass(() => getServerSession(getAuthOptions())),
     queryFn = defaultQueryFn,
     fxConverter = convertToMxn,
     uuidFactory = () => crypto.randomUUID(),

@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:e2e": "E2E_AUTH_BYPASS=1 playwright test"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^7.9.0",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.38",
-    "tailwindcss": "^3.4.4"
+    "tailwindcss": "^3.4.4",
+    "@playwright/test": "^1.54.2"
   }
 }

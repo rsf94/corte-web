@@ -1,5 +1,6 @@
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../../lib/e2e_auth_bypass.js";
 import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
 import { parseExpenseTextWithCore } from "../../../lib/finclaro_core_bridge.js";
 import { convertToMxn } from "../../../lib/fx/frankfurter.js";
@@ -14,7 +15,7 @@ function normalizeCurrency(value = "") {
 export async function handleExpenseDraftPost(
   request,
   {
-    getSession = () => getServerSession(getAuthOptions()),
+    getSession = () => getSessionWithE2EBypass(() => getServerSession(getAuthOptions())),
     queryFn,
     fxConverter = convertToMxn,
     now = new Date(),

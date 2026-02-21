@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { evaluateSessionAccess, getDashboardRedirect } from "../../lib/access_control.js";
 import { logAccessDenied } from "../../lib/access_log.js";
 import { getAuthOptions } from "../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../lib/e2e_auth_bypass.js";
 import { handleDashboardLinkToken } from "../../lib/dashboard_link_handler.js";
 import { getAllowedEmails } from "../../lib/allowed_emails.js";
 import { startOfMonthISO } from "../../lib/date_utils.js";
@@ -13,7 +14,7 @@ import { consumeLinkTokenAppendOnly } from "../../lib/user_links.js";
 export const dynamic = "force-dynamic";
 
 export default async function Dashboard({ searchParams }) {
-  const session = await getServerSession(getAuthOptions());
+  const session = await getSessionWithE2EBypass(() => getServerSession(getAuthOptions()));
   const allowedEmails = getAllowedEmails();
   if (!allowedEmails.length) {
     logAccessDenied({ reason: "missing_allowlist", email: "", path: "/dashboard" });

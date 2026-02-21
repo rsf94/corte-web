@@ -2,6 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import crypto from "node:crypto";
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../../lib/e2e_auth_bypass.js";
 import { fetchLatestLinkedChatIdByUserId } from "../../../lib/identity_links.js";
 import { logAccessDenied } from "../../../lib/access_log.js";
 import { getAllowedEmails, isEmailAllowed, normalizeEmail } from "../../../lib/allowed_emails.js";
@@ -254,7 +255,7 @@ function logCashflowError(errorPayload) {
 export async function handleCashflowGet(
   request,
   {
-    getSession = () => getServerSession(getAuthOptions()),
+    getSession = () => getSessionWithE2EBypass(() => getServerSession(getAuthOptions())),
     queryFn = defaultQueryFn
   } = {}
 ) {

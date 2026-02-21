@@ -1,11 +1,12 @@
 import { getServerSession } from "next-auth";
 import { getAuthOptions } from "../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../lib/e2e_auth_bypass.js";
 import { ensureUserExistsByEmail } from "../../lib/identity_links.js";
 import DashboardNav from "./dashboard-nav.js";
 import DashboardSignOutButton from "./dashboard-sign-out-button.js";
 
 export default async function DashboardLayout({ children }) {
-  const session = await getServerSession(getAuthOptions());
+  const session = await getSessionWithE2EBypass(() => getServerSession(getAuthOptions()));
   const sessionEmail = session?.user?.email ?? "";
 
   if (sessionEmail) {
