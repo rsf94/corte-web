@@ -21,10 +21,13 @@ export async function handleExpenseCaptureContextGet(
   } = {}
 ) {
   try {
-    const authContext = await getAuthedUserContext(request, { getSession, queryFn });
+    const session = await getSession();
+    const authContext = await getAuthedUserContext(request, { getSession: () => session, queryFn });
     if (authContext.errorResponse) return authContext.errorResponse;
 
-    const chatId = await fetchLatestLinkedChatIdByUserId(authContext.user_id, { queryFn });
+    const linkedChatId = await fetchLatestLinkedChatIdByUserId(authContext.user_id, { queryFn });
+    const sessionChatId = String(session?.chat_id || session?.user?.chat_id || "").trim();
+    const chatId = linkedChatId || sessionChatId;
     const context = await fetchExpenseCaptureContext({ userId: authContext.user_id, chatId }, { queryFn });
     return Response.json({ ok: true, ...context });
   } catch (error) {
