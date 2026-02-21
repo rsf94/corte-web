@@ -29,6 +29,32 @@ function buildConfirmPayload(draft, selectedPaymentMethod) {
   };
 }
 
+
+function normalizeMethod(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveDraftMethod(draft, methods) {
+  const draftMethod = normalizeMethod(draft?.payment_method);
+  if (!draftMethod || !Array.isArray(methods) || !methods.length) {
+    return { selectedMethod: "", ambiguousMatches: [] };
+  }
+
+  const exactMatch = methods.find((method) => normalizeMethod(method) === draftMethod);
+  if (exactMatch) return { selectedMethod: exactMatch, ambiguousMatches: [] };
+
+  const partialMatches = methods.filter((method) => normalizeMethod(method).includes(draftMethod));
+  if (partialMatches.length === 1) {
+    return { selectedMethod: partialMatches[0], ambiguousMatches: [] };
+  }
+
+  if (partialMatches.length > 1) {
+    return { selectedMethod: "", ambiguousMatches: partialMatches };
+  }
+
+  return { selectedMethod: "", ambiguousMatches: [] };
+}
+
 function pickContextPaymentMethods(body) {
   const suggestions = body?.suggestions ?? {};
   if (Array.isArray(suggestions.payment_methods)) return suggestions.payment_methods;
@@ -105,7 +131,18 @@ export default function CapturaChat() {
       }
 
       dispatch({ type: "submit_text_success", draft: body.draft });
-      setMessages((current) => [...current, { id: `s-${Date.now()}`, role: "system", text: body.ui?.message || "Revisa y confirma.", time: nowTimeLabel() }]);
+      const draftMethodResolution = resolveDraftMethod(body.draft, paymentMethodButtons);
+      if (draftMethodResolution.selectedMethod) {
+        dispatch({ type: "select_payment_method", paymentMethod: draftMethodResolution.selectedMethod });
+      }
+
+      const flowHint = draftMethodResolution.ambiguousMatches.length
+        ? `Encontré varios métodos posibles (${draftMethodResolution.ambiguousMatches.join(", ")}). Elige uno para continuar.`
+        : !draftMethodResolution.selectedMethod && paymentMethodButtons.length > 1
+          ? "Elige tu método de pago para continuar."
+          : body.ui?.message || "Revisa y confirma.";
+
+      setMessages((current) => [...current, { id: `s-${Date.now()}`, role: "system", text: flowHint, time: nowTimeLabel() }]);
       setText("");
     } catch (error) {
       dispatch({ type: "submit_text_error", message: error.message });
@@ -140,6 +177,7 @@ export default function CapturaChat() {
   function cancelDraft() {
     dispatch({ type: "cancel" });
     setText("");
+    setMessages((current) => [...current, { id: `cancel-${Date.now()}`, role: "system", text: "Borrador cancelado.", time: nowTimeLabel() }]);
   }
 
   return (
@@ -199,7 +237,7 @@ export default function CapturaChat() {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-slate-600">No encontramos métodos de pago. Pronto podrás configurarlos.</p>
+              <p className="text-xs text-slate-600">No encontramos métodos de pago todavía. Verifica tus cuentas vinculadas.</p>
             )}
           </div>
 

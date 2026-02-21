@@ -49,6 +49,9 @@ test("GET /api/expense-capture-context normaliza métodos por user_id", async ()
           ]];
         }
 
+        if (query.includes("FROM `project.dataset.expenses`")) return [[{ payment_method: "BBVA Azul" }]];
+        if (query.includes("FROM `project.dataset.accounts`")) return [[]];
+
         return [[]];
       }
     });
@@ -84,13 +87,19 @@ test("GET /api/expense-capture-context usa fallback de chat_id si user_id no tie
         if (query.includes("FROM `project.dataset.trips`")) return [[]];
 
         if (query.includes("FROM `project.dataset.card_rules`")) {
-          ownerIds.push(params.owner_id);
+          ownerIds.push(`rules:${params.owner_id}`);
           if (params.owner_id === "user-123") return [[]];
           return [[{ card_name: "TDC Legacy" }]];
         }
 
         if (query.includes("FROM `project.dataset.expenses`")) {
+          ownerIds.push(`expenses:${params.owner_id}`);
           return [[]];
+        }
+
+        if (query.includes("FROM `project.dataset.accounts`")) {
+          ownerIds.push(`accounts:${params.owner_id}`);
+          return [[{ account_name: "Nu Débito" }]];
         }
 
         return [[]];
@@ -99,8 +108,42 @@ test("GET /api/expense-capture-context usa fallback de chat_id si user_id no tie
 
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.deepEqual(body.suggestions.payment_methods, ["TDC Legacy"]);
-    assert.deepEqual(ownerIds, ["user-123", "chat-999"]);
+    assert.deepEqual(body.suggestions.payment_methods, ["TDC Legacy", "Nu Débito"]);
+    assert.deepEqual(ownerIds, ["rules:user-123", "expenses:user-123", "rules:chat-999", "expenses:chat-999", "accounts:chat-999"]);
+  } finally {
+    restore();
+  }
+});
+
+
+test("GET /api/expense-capture-context usa chat_id de sesión cuando no hay chat_link", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpenseCaptureContextGet } = await import("../app/api/expense-capture-context/route.js");
+    const req = new Request("http://localhost:3000/api/expense-capture-context");
+
+    const response = await handleExpenseCaptureContextGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com", chat_id: "chat-session-1" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-123", chatId: "" });
+        if (resolved) return resolved;
+
+        if (query.includes("FROM `project.dataset.trips`")) return [[]];
+        if (query.includes("FROM `project.dataset.card_rules`")) return [[]];
+        if (query.includes("FROM `project.dataset.expenses`")) return [[]];
+        if (query.includes("FROM `project.dataset.accounts`")) {
+          assert.equal(params.owner_id, "chat-session-1");
+          return [[{ account_name: "BBVA Débito" }]];
+        }
+
+        return [[]];
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.suggestions.payment_methods, ["BBVA Débito"]);
   } finally {
     restore();
   }
