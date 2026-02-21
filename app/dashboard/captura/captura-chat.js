@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CAPTURA_PHASES, captureFlowReducer, createInitialCaptureState, draftNeedsMsiMonths } from "../../../lib/captura_flow.js";
+import { CAPTURA_PHASES, captureFlowReducer, createInitialCaptureState } from "../../../lib/captura_flow.js";
 
 function nowTimeLabel() {
   return new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
@@ -11,7 +11,7 @@ function formatMoney(value, currency = "MXN") {
   return new Intl.NumberFormat("es-MX", { style: "currency", currency }).format(Number(value || 0));
 }
 
-function buildConfirmPayload(draft, selectedPaymentMethod) {
+function buildConfirmPayload(draft, selectedPaymentMethod, includeTrip) {
   return {
     purchase_date: draft.purchase_date,
     amount: draft.original_amount,
@@ -22,7 +22,7 @@ function buildConfirmPayload(draft, selectedPaymentMethod) {
     description: draft.description || "",
     is_msi: draft.is_msi,
     msi_months: draft.msi_months,
-    trip_id: draft.trip_id || null
+    trip_id: includeTrip ? (draft.trip_id || null) : null
   };
 }
 
@@ -63,6 +63,7 @@ export default function CapturaChat() {
   const [flow, dispatch] = useReducer(captureFlowReducer, undefined, createInitialCaptureState);
   const [methods, setMethods] = useState([]);
   const [trip, setTrip] = useState(null);
+  const [hasActiveTrip, setHasActiveTrip] = useState(false);
   const [includeTrip, setIncludeTrip] = useState(true);
   const chatBodyRef = useRef(null);
 
@@ -78,8 +79,11 @@ export default function CapturaChat() {
 
         const contextMethods = Array.isArray(body.methods) ? body.methods : [];
         setMethods(contextMethods);
-        setTrip(body.active_trip ?? null);
-        setIncludeTrip(Boolean(body.hasTrip));
+        const activeTrip = body.active_trip ?? null;
+        const backendHasTrip = Boolean(body.hasTrip || body.activeTripId || activeTrip?.id);
+        setTrip(activeTrip);
+        setHasActiveTrip(backendHasTrip);
+        setIncludeTrip(backendHasTrip);
       } catch {
         if (!cancelled) {
           setMessages((current) => [...current, { id: `ctx-${Date.now()}`, role: "system", text: "No pude cargar contexto. Puedes seguir capturando.", time: nowTimeLabel() }]);
@@ -98,6 +102,9 @@ export default function CapturaChat() {
   }, [messages, flow.phase]);
 
   const methodButtons = useMemo(() => methods.map((method) => method.label), [methods]);
+  const shouldShowTripQuickReplies = Boolean(flow.draft && (hasActiveTrip || flow.draft?.trip_id));
+  const canPickMethod = Boolean(flow.draft) && flow.phase !== CAPTURA_PHASES.LOADING_DRAFT && flow.phase !== CAPTURA_PHASES.SAVING;
+  const shouldShowMethodEmpty = Boolean(flow.draft) && methodButtons.length === 0;
   const canSend = flow.phase !== CAPTURA_PHASES.LOADING_DRAFT && flow.phase !== CAPTURA_PHASES.SAVING;
 
   async function sendText(event) {
@@ -107,6 +114,8 @@ export default function CapturaChat() {
 
     setMessages((current) => [...current, { id: `u-${Date.now()}`, role: "user", text: trimmed, time: nowTimeLabel() }]);
     setText("");
+    const requestIncludeTrip = hasActiveTrip ? includeTrip : false;
+    setIncludeTrip(hasActiveTrip);
     dispatch({ type: "submit_text_start" });
 
     try {
@@ -115,9 +124,9 @@ export default function CapturaChat() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           text: trimmed,
-          include_trip: includeTrip,
-          trip_id: includeTrip ? trip?.id : "",
-          trip_base_currency: includeTrip ? trip?.base_currency : ""
+          include_trip: requestIncludeTrip,
+          trip_id: requestIncludeTrip ? trip?.id : "",
+          trip_base_currency: requestIncludeTrip ? trip?.base_currency : ""
         })
       });
 
@@ -125,6 +134,7 @@ export default function CapturaChat() {
       if (!res.ok) throw new Error(body.error || "No pude interpretar el gasto");
 
       dispatch({ type: "submit_text_success", draft: body.draft });
+      if (body.draft?.trip_id) setIncludeTrip(true);
       const match = resolveDraftMethod(body.draft, methods);
       if (match.selectedMethod) dispatch({ type: "select_payment_method", paymentMethod: match.selectedMethod });
 
@@ -150,12 +160,13 @@ export default function CapturaChat() {
       const res = await fetch("/api/expenses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildConfirmPayload(flow.draft, flow.selectedPaymentMethod))
+        body: JSON.stringify(buildConfirmPayload(flow.draft, flow.selectedPaymentMethod, includeTrip))
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "No se pudo guardar");
 
       dispatch({ type: "confirm_success" });
+      setIncludeTrip(hasActiveTrip);
       setMessages((current) => [...current, { id: `done-${Date.now()}`, role: "system", text: "Guardado ✅", time: nowTimeLabel() }]);
       dispatch({ type: "reset_after_done" });
     } catch (error) {
@@ -166,12 +177,23 @@ export default function CapturaChat() {
 
   function cancelDraft() {
     dispatch({ type: "cancel" });
+    setIncludeTrip(hasActiveTrip);
     setMessages((current) => [...current, { id: `cancel-${Date.now()}`, role: "system", text: "Cancelado.", time: nowTimeLabel() }]);
   }
 
   function setMsiMonths(months) {
     dispatch({ type: "set_msi_months", months: String(months) });
     setMessages((current) => [...current, { id: `msi-${Date.now()}`, role: "user", text: `${months} meses`, time: nowTimeLabel() }]);
+  }
+
+  function selectTripChoice(nextIncludeTrip) {
+    setIncludeTrip(nextIncludeTrip);
+    setMessages((current) => [...current, {
+      id: `trip-${Date.now()}`,
+      role: "user",
+      text: nextIncludeTrip ? "Es del viaje" : "No es del viaje",
+      time: nowTimeLabel()
+    }]);
   }
 
   return (
@@ -194,14 +216,47 @@ export default function CapturaChat() {
           </div>
         ) : null}
 
-        {flow.phase === CAPTURA_PHASES.AWAITING_PAYMENT_METHOD ? (
+        {shouldShowTripQuickReplies ? (
+          <div className="space-y-1">
+            <p className="text-xs text-slate-600">¿Este gasto pertenece al viaje activo?</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={`rounded-full px-3 py-1.5 text-xs ${includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}
+                onClick={() => selectTripChoice(true)}
+              >
+                Es del viaje
+              </button>
+              <button
+                type="button"
+                className={`rounded-full px-3 py-1.5 text-xs ${!includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}
+                onClick={() => selectTripChoice(false)}
+              >
+                No es del viaje
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {flow.draft ? (
           <div className="flex flex-wrap gap-2">
-            {methodButtons.length ? methodButtons.map((method) => (
-              <button key={method} type="button" className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs" onClick={() => dispatch({ type: "select_payment_method", paymentMethod: method })}>
+            {methodButtons.map((method) => (
+              <button
+                key={method}
+                type="button"
+                className={`rounded-full border px-3 py-1.5 text-xs ${flow.selectedPaymentMethod === method ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white"}`}
+                onClick={() => dispatch({ type: "select_payment_method", paymentMethod: method })}
+                disabled={!canPickMethod}
+              >
                 {method}
               </button>
-            )) : <p className="text-xs text-slate-600">Sin métodos aún. Vincula cuentas o usa otro método registrado.</p>}
-            <button type="button" onClick={cancelDraft} className="rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">Cancelar</button>
+            ))}
+
+            {shouldShowMethodEmpty ? <p className="text-xs text-slate-600">No hay métodos de pago disponibles. Vincula al menos uno para confirmar.</p> : null}
+
+            {(flow.phase === CAPTURA_PHASES.AWAITING_PAYMENT_METHOD || flow.phase === CAPTURA_PHASES.AWAITING_MSI_MONTHS || flow.phase === CAPTURA_PHASES.READY_TO_CONFIRM) ? (
+              <button type="button" onClick={cancelDraft} className="rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">Cancelar</button>
+            ) : null}
           </div>
         ) : null}
 
@@ -214,7 +269,6 @@ export default function CapturaChat() {
                   {months}
                 </button>
               ))}
-              <button type="button" onClick={cancelDraft} className="rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">Cancelar</button>
             </div>
           </div>
         ) : null}
@@ -225,23 +279,6 @@ export default function CapturaChat() {
             <button type="button" onClick={cancelDraft} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs">Cancelar</button>
           </div>
         ) : null}
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          className={`rounded-full px-3 py-1.5 text-xs ${includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}
-          onClick={() => setIncludeTrip(true)}
-        >
-          Es del viaje
-        </button>
-        <button
-          type="button"
-          className={`rounded-full px-3 py-1.5 text-xs ${!includeTrip ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}
-          onClick={() => setIncludeTrip(false)}
-        >
-          No es del viaje
-        </button>
       </div>
 
       <form onSubmit={sendText} className="mt-3 flex gap-2">
