@@ -16,13 +16,12 @@ function withEnv(overrides) {
   };
 }
 
-function identityResolverQuery(query, { userId = "user-1", chatId = "" } = {}) {
+function identityResolverQuery(query, { userId = "user-1" } = {}) {
   if (query.includes(".users")) return [[{ user_id: userId }]];
-  if (query.includes(".chat_links")) return [[chatId ? { chat_id: chatId } : {}].filter((row) => row.chat_id)];
   return null;
 }
 
-test("GET /api/expense-capture-context normaliza métodos por user_id", async () => {
+test("GET /api/expense-capture-context normaliza métodos de pago y conserva suggestions.payment_methods", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
   const queries = [];
 
@@ -49,6 +48,10 @@ test("GET /api/expense-capture-context normaliza métodos por user_id", async ()
           ]];
         }
 
+        if (query.includes("FROM `project.dataset.expenses`")) {
+          return [[{ payment_method: "No debería usarse" }]];
+        }
+
         return [[]];
       }
     });
@@ -61,46 +64,10 @@ test("GET /api/expense-capture-context normaliza métodos por user_id", async ()
 
     const cardRulesQuery = queries.find((entry) => entry.query.includes("FROM `project.dataset.card_rules`"));
     assert.ok(cardRulesQuery);
-    assert.equal(cardRulesQuery.params.owner_id, "user-123");
-  } finally {
-    restore();
-  }
-});
+    assert.equal(cardRulesQuery.params.user_id, "user-123");
+    assert.doesNotMatch(cardRulesQuery.query, /chat_id/);
 
-test("GET /api/expense-capture-context usa fallback chat_id si user_id no tiene métodos", async () => {
-  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
-  const ownerIds = [];
-
-  try {
-    const { handleExpenseCaptureContextGet } = await import("../app/api/expense-capture-context/route.js");
-    const req = new Request("http://localhost:3000/api/expense-capture-context");
-
-    const response = await handleExpenseCaptureContextGet(req, {
-      getSession: async () => ({ user: { email: "user@example.com" } }),
-      queryFn: async ({ query, params }) => {
-        const resolved = identityResolverQuery(query, { userId: "user-123", chatId: "chat-999" });
-        if (resolved) return resolved;
-
-        if (query.includes("FROM `project.dataset.trips`")) return [[]];
-
-        if (query.includes("FROM `project.dataset.card_rules`")) {
-          ownerIds.push(params.owner_id);
-          if (params.owner_id === "user-123") return [[]];
-          return [[{ card_name: "TDC Legacy" }]];
-        }
-
-        if (query.includes("FROM `project.dataset.expenses`")) {
-          return [[]];
-        }
-
-        return [[]];
-      }
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.deepEqual(body.suggestions.payment_methods, ["TDC Legacy"]);
-    assert.deepEqual(ownerIds, ["user-123", "chat-999"]);
+    assert.equal(queries.some((entry) => entry.query.includes("FROM `project.dataset.expenses`")), false);
   } finally {
     restore();
   }
