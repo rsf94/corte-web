@@ -84,17 +84,18 @@ test("captura chat smoke usa flujo draft y confirmación", async () => {
   assert.match(source, /fetch\("\/api\/expense-capture-context"/);
   assert.match(source, /fetch\("\/api\/expense-draft"/);
   assert.match(source, /fetch\("\/api\/expenses"/);
-  assert.match(source, /Confirmar/);
-  assert.match(source, /✅ Guardado/);
+  assert.match(source, /Listo\. Elige método de pago para continuar\./);
+  assert.match(source, /Guardado ✅/);
 });
 
 
-test("captura chat prioriza métodos regresados por backend y soporta snake_case/camelCase", async () => {
+test("captura chat renderiza quick replies para métodos, MSI y viaje", async () => {
   const source = await fs.readFile(new URL("../app/dashboard/captura/captura-chat.js", import.meta.url), "utf8");
 
-  assert.match(source, /function pickContextPaymentMethods\(body\)/);
-  assert.match(source, /suggestions\.payment_methods/);
-  assert.match(source, /suggestions\.paymentMethods/);
-  assert.match(source, /paymentMethodButtons\.length \?/);
-  assert.match(source, /No encontramos métodos de pago/);
+  assert.match(source, /Array\.isArray\(body\.methods\)/);
+  assert.match(source, /flow\.phase === CAPTURA_PHASES\.AWAITING_PAYMENT_METHOD/);
+  assert.match(source, /flow\.phase === CAPTURA_PHASES\.AWAITING_MSI_MONTHS/);
+  assert.match(source, /\[3, 6, 9, 12\]/);
+  assert.match(source, /Es del viaje/);
+  assert.match(source, /No es del viaje/);
 });

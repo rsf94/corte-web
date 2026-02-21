@@ -22,9 +22,8 @@ function identityResolverQuery(query, { userId = "user-1", chatId = "" } = {}) {
   return null;
 }
 
-test("GET /api/expense-capture-context normaliza métodos por user_id", async () => {
+test("GET /api/expense-capture-context mezcla métodos de user_id + chat_id", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
-  const queries = [];
 
   try {
     const { handleExpenseCaptureContextGet } = await import("../app/api/expense-capture-context/route.js");
@@ -33,24 +32,22 @@ test("GET /api/expense-capture-context normaliza métodos por user_id", async ()
     const response = await handleExpenseCaptureContextGet(req, {
       getSession: async () => ({ user: { email: "user@example.com" } }),
       queryFn: async ({ query, params }) => {
-        queries.push({ query, params });
-        const resolved = identityResolverQuery(query, { userId: "user-123" });
+        const resolved = identityResolverQuery(query, { userId: "user-123", chatId: "chat-999" });
         if (resolved) return resolved;
 
-        if (query.includes("FROM `project.dataset.trips`")) {
-          return [[{ id: "trip-1", base_currency: "mxn" }]];
-        }
-
+        if (query.includes("FROM `project.dataset.trips`")) return [[{ id: "trip-1", base_currency: "mxn" }]];
         if (query.includes("FROM `project.dataset.card_rules`")) {
-          return [[
-            { payment_method: "Amex Gold" },
-            { card_name: "BBVA Azul" },
-            { account_name: "Amex Gold" }
-          ]];
+          if (params.owner_id === "user-123") return [[{ card_name: "Amex Gold" }]];
+          return [[{ card_name: "TDC Legacy" }]];
         }
-
-        if (query.includes("FROM `project.dataset.expenses`")) return [[{ payment_method: "BBVA Azul" }]];
-        if (query.includes("FROM `project.dataset.accounts`")) return [[]];
+        if (query.includes("FROM `project.dataset.expenses`")) {
+          if (params.owner_id === "user-123") return [[{ payment_method: "BBVA Azul" }]];
+          return [[{ payment_method: "Nu Débito" }]];
+        }
+        if (query.includes("FROM `project.dataset.accounts`")) {
+          if (params.owner_id === "user-123") return [[{ account_name: "Amex Gold" }]];
+          return [[{ account_name: "nu débito" }]];
+        }
 
         return [[]];
       }
@@ -59,20 +56,21 @@ test("GET /api/expense-capture-context normaliza métodos por user_id", async ()
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.ok, true);
-    assert.deepEqual(body.suggestions.payment_methods, ["Amex Gold", "BBVA Azul"]);
-    assert.deepEqual(body.active_trip, { id: "trip-1", base_currency: "MXN" });
-
-    const cardRulesQuery = queries.find((entry) => entry.query.includes("FROM `project.dataset.card_rules`"));
-    assert.ok(cardRulesQuery);
-    assert.equal(cardRulesQuery.params.owner_id, "user-123");
+    assert.deepEqual(body.methods, [
+      { id: "amex gold", label: "Amex Gold" },
+      { id: "bbva azul", label: "BBVA Azul" },
+      { id: "tdc legacy", label: "TDC Legacy" },
+      { id: "nu débito", label: "Nu Débito" }
+    ]);
+    assert.equal(body.hasTrip, true);
+    assert.equal(body.activeTripId, "trip-1");
   } finally {
     restore();
   }
 });
 
-test("GET /api/expense-capture-context usa fallback de chat_id si user_id no tiene métodos", async () => {
+test("GET /api/expense-capture-context no regresa vacío si legacy tiene métodos", async () => {
   const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
-  const ownerIds = [];
 
   try {
     const { handleExpenseCaptureContextGet } = await import("../app/api/expense-capture-context/route.js");
@@ -85,57 +83,12 @@ test("GET /api/expense-capture-context usa fallback de chat_id si user_id no tie
         if (resolved) return resolved;
 
         if (query.includes("FROM `project.dataset.trips`")) return [[]];
-
         if (query.includes("FROM `project.dataset.card_rules`")) {
-          ownerIds.push(`rules:${params.owner_id}`);
-          if (params.owner_id === "user-123") return [[]];
-          return [[{ card_name: "TDC Legacy" }]];
-        }
-
-        if (query.includes("FROM `project.dataset.expenses`")) {
-          ownerIds.push(`expenses:${params.owner_id}`);
+          if (params.owner_id === "chat-999") return [[{ card_name: "Santander LikeU" }]];
           return [[]];
         }
-
-        if (query.includes("FROM `project.dataset.accounts`")) {
-          ownerIds.push(`accounts:${params.owner_id}`);
-          return [[{ account_name: "Nu Débito" }]];
-        }
-
-        return [[]];
-      }
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.deepEqual(body.suggestions.payment_methods, ["TDC Legacy", "Nu Débito"]);
-    assert.deepEqual(ownerIds, ["rules:user-123", "expenses:user-123", "rules:chat-999", "expenses:chat-999", "accounts:chat-999"]);
-  } finally {
-    restore();
-  }
-});
-
-
-test("GET /api/expense-capture-context usa chat_id de sesión cuando no hay chat_link", async () => {
-  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
-
-  try {
-    const { handleExpenseCaptureContextGet } = await import("../app/api/expense-capture-context/route.js");
-    const req = new Request("http://localhost:3000/api/expense-capture-context");
-
-    const response = await handleExpenseCaptureContextGet(req, {
-      getSession: async () => ({ user: { email: "user@example.com", chat_id: "chat-session-1" } }),
-      queryFn: async ({ query, params }) => {
-        const resolved = identityResolverQuery(query, { userId: "user-123", chatId: "" });
-        if (resolved) return resolved;
-
-        if (query.includes("FROM `project.dataset.trips`")) return [[]];
-        if (query.includes("FROM `project.dataset.card_rules`")) return [[]];
         if (query.includes("FROM `project.dataset.expenses`")) return [[]];
-        if (query.includes("FROM `project.dataset.accounts`")) {
-          assert.equal(params.owner_id, "chat-session-1");
-          return [[{ account_name: "BBVA Débito" }]];
-        }
+        if (query.includes("FROM `project.dataset.accounts`")) return [[]];
 
         return [[]];
       }
@@ -143,7 +96,9 @@ test("GET /api/expense-capture-context usa chat_id de sesión cuando no hay chat
 
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.deepEqual(body.suggestions.payment_methods, ["BBVA Débito"]);
+    assert.deepEqual(body.methods, [{ id: "santander likeu", label: "Santander LikeU" }]);
+    assert.equal(body.hasTrip, false);
+    assert.equal(body.activeTripId, null);
   } finally {
     restore();
   }
