@@ -49,6 +49,14 @@ test("expenses explorer renders filtros tabla y paginación", async () => {
   assert.match(tableSource, /Meses MSI/);
 });
 
+
+
+test("expenses explorer resets pagination when applying filters", async () => {
+  const source = await fs.readFile(new URL("../app/dashboard/expenses/expenses-explorer.js", import.meta.url), "utf8");
+
+  assert.match(source, /setNextCursor\(""\);/);
+  assert.match(source, /runFetch\(\{ append: false, cursor: "", filters: \{ \.\.\.draft \} \}\);/);
+});
 test("captura chat smoke usa flujo draft y confirmación", async () => {
   const source = await fs.readFile(new URL("../app/dashboard/captura/captura-chat.js", import.meta.url), "utf8");
 
