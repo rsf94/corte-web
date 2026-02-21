@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { evaluateSessionAccess } from "../../lib/access_control.js";
 import { logAccessDenied } from "../../lib/access_log.js";
 import { getAuthOptions } from "../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../lib/e2e_auth_bypass.js";
 import { parseLinkToken } from "../../lib/link_token.js";
 import { upsertUserLink } from "../../lib/user_links.js";
 
@@ -40,7 +41,7 @@ export default async function LinkPage({ searchParams }) {
     );
   }
 
-  const session = await getServerSession(getAuthOptions());
+  const session = await getSessionWithE2EBypass(() => getServerSession(getAuthOptions()));
   if (!session) {
     const returnUrl = buildReturnUrl(searchParams);
     redirect(`/login?callbackUrl=${encodeURIComponent(returnUrl)}`);

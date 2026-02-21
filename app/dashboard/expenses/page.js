@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import { evaluateSessionAccess, getDashboardRedirect } from "../../../lib/access_control.js";
 import { getAuthOptions } from "../../../lib/auth.js";
+import { getSessionWithE2EBypass } from "../../../lib/e2e_auth_bypass.js";
 import { getAllowedEmails } from "../../../lib/allowed_emails.js";
 import { logAccessDenied } from "../../../lib/access_log.js";
 import ExpensesExplorer from "./expenses-explorer.js";
@@ -9,7 +10,7 @@ import ExpensesExplorer from "./expenses-explorer.js";
 export const dynamic = "force-dynamic";
 
 export default async function ExpensesPage() {
-  const session = await getServerSession(getAuthOptions());
+  const session = await getSessionWithE2EBypass(() => getServerSession(getAuthOptions()));
   const access = evaluateSessionAccess(session, getAllowedEmails());
   const redirectTo = getDashboardRedirect({ sessionStatus: access.status, usingTokenFallback: false });
 
