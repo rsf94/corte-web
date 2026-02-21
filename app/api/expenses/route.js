@@ -5,6 +5,7 @@ import { getAuthOptions } from "../../../lib/auth.js";
 import { fetchLatestLinkedChatIdByUserId } from "../../../lib/identity_links.js";
 import { getAuthedUserContext } from "../../../lib/auth_user_context.js";
 import { convertToMxn } from "../../../lib/fx/frankfurter.js";
+import { normalizeExpensePayloadWithCore } from "../../../lib/finclaro_core_bridge.js";
 
 export const dynamic = "force-dynamic";
 
@@ -315,7 +316,8 @@ export async function handleExpensesPost(
     getSession = () => getServerSession(getAuthOptions()),
     queryFn = defaultQueryFn,
     fxConverter = convertToMxn,
-    uuidFactory = () => crypto.randomUUID()
+    uuidFactory = () => crypto.randomUUID(),
+    normalizePayloadWithCore = normalizeExpensePayloadWithCore
   } = {}
 ) {
   try {
@@ -323,7 +325,25 @@ export async function handleExpensesPost(
     if (authContext.errorResponse) return authContext.errorResponse;
 
     const payload = await request.json();
-    const validationError = validateExpensePayload(payload);
+    const coreNormalized = await normalizePayloadWithCore(payload);
+    const sourcePayload = coreNormalized && typeof coreNormalized === "object"
+      ? {
+          ...payload,
+          ...coreNormalized,
+          purchase_date: coreNormalized.purchase_date ?? coreNormalized.purchaseDate ?? payload.purchase_date,
+          amount: coreNormalized.amount ?? coreNormalized.original_amount ?? coreNormalized.originalAmount ?? payload.amount,
+          currency: coreNormalized.currency ?? coreNormalized.original_currency ?? coreNormalized.originalCurrency ?? payload.currency,
+          payment_method: coreNormalized.payment_method ?? coreNormalized.paymentMethod ?? payload.payment_method,
+          category: coreNormalized.category ?? payload.category,
+          merchant: coreNormalized.merchant ?? payload.merchant,
+          description: coreNormalized.description ?? payload.description,
+          is_msi: coreNormalized.is_msi ?? coreNormalized.isMsi ?? payload.is_msi,
+          msi_months: coreNormalized.msi_months ?? coreNormalized.msiMonths ?? payload.msi_months,
+          trip_id: coreNormalized.trip_id ?? coreNormalized.tripId ?? payload.trip_id
+        }
+      : payload;
+
+    const validationError = validateExpensePayload(sourcePayload);
     if (validationError) {
       return Response.json({ error: validationError }, { status: 400 });
     }
@@ -332,13 +352,13 @@ export async function handleExpensesPost(
     const projectId = requiredEnv("BQ_PROJECT_ID");
     const expensesTable = `\`${projectId}.${dataset}.expenses\``;
 
-    const currency = normalizeCurrency(payload.currency);
-    const amount = Number(payload.amount);
-    const purchaseDate = parseISODate(payload.purchase_date);
-    const isMsi = Boolean(payload.is_msi ?? false);
-    const msiMonths = payload.msi_months === undefined || payload.msi_months === null
+    const currency = normalizeCurrency(sourcePayload.currency);
+    const amount = Number(sourcePayload.amount);
+    const purchaseDate = parseISODate(sourcePayload.purchase_date);
+    const isMsi = Boolean(sourcePayload.is_msi ?? false);
+    const msiMonths = sourcePayload.msi_months === undefined || sourcePayload.msi_months === null
       ? null
-      : Number.parseInt(String(payload.msi_months), 10);
+      : Number.parseInt(String(sourcePayload.msi_months), 10);
 
     let amountMxn = amount;
     let amountMxnSource = "direct";
@@ -364,13 +384,13 @@ export async function handleExpensesPost(
       purchase_date: purchaseDate,
       amount_mxn: amountMxn,
       currency,
-      payment_method: String(payload.payment_method).trim(),
-      category: String(payload.category).trim(),
-      merchant: String(payload.merchant || "").trim() || null,
-      description: String(payload.description || "").trim() || null,
+      payment_method: String(sourcePayload.payment_method).trim(),
+      category: String(sourcePayload.category).trim(),
+      merchant: String(sourcePayload.merchant || "").trim() || null,
+      description: String(sourcePayload.description || "").trim() || null,
       is_msi: isMsi,
       msi_months: msiMonths,
-      trip_id: String(payload.trip_id || "").trim() || null,
+      trip_id: String(sourcePayload.trip_id || "").trim() || null,
       user_id: authContext.user_id,
       original_amount: originalAmount,
       original_currency: originalCurrency,
