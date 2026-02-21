@@ -56,3 +56,10 @@ test("smoke frontend: submit texto crea draft, seleccionar método habilita conf
 
   assert.deepEqual(state, createInitialCaptureState());
 });
+
+
+test("autoselección cuando solo existe un método", () => {
+  const onlyMethod = [{ id: "nu", label: "Nu" }];
+  const match = resolveDraftMethod({ ...draft, payment_method: "" }, onlyMethod);
+  assert.equal(match.selectedMethod, "Nu");
+});

@@ -97,3 +97,13 @@ test("nuevo texto durante awaitingPaymentMethod resetea y crea nuevo draft", () 
   assert.equal(state.phase, CAPTURA_PHASES.AWAITING_PAYMENT_METHOD);
   assert.equal(state.draft.description, "uber");
 });
+
+
+test("loadingContext -> done regresa a idle sin romper flujo", () => {
+  let state = createInitialCaptureState();
+  state = captureFlowReducer(state, { type: "load_context_start" });
+  assert.equal(state.phase, CAPTURA_PHASES.LOADING_CONTEXT);
+
+  state = captureFlowReducer(state, { type: "load_context_done" });
+  assert.equal(state.phase, CAPTURA_PHASES.IDLE);
+});
