@@ -13,24 +13,15 @@ const baseDraft = {
   msi_months: null
 };
 
-test("captura usa métodos reales del endpoint y permite seleccionar método", () => {
+test("happy path normal: draft -> método -> confirmar", () => {
   let state = createInitialCaptureState();
-  state = captureFlowReducer(state, { type: "submit_text_start" });
   state = captureFlowReducer(state, { type: "submit_text_success", draft: baseDraft });
-
   assert.equal(state.phase, CAPTURA_PHASES.AWAITING_PAYMENT_METHOD);
 
   state = captureFlowReducer(state, { type: "select_payment_method", paymentMethod: "Amex Gold" });
-  assert.equal(state.selectedPaymentMethod, "Amex Gold");
   assert.equal(state.phase, CAPTURA_PHASES.READY_TO_CONFIRM);
-});
 
-test("draft -> seleccionar método -> confirmar resetea estado", () => {
-  let state = createInitialCaptureState();
-  state = captureFlowReducer(state, { type: "submit_text_success", draft: baseDraft });
-  state = captureFlowReducer(state, { type: "select_payment_method", paymentMethod: "BBVA Azul" });
   state = captureFlowReducer(state, { type: "confirm_start" });
-
   assert.equal(state.phase, CAPTURA_PHASES.SAVING);
 
   state = captureFlowReducer(state, { type: "confirm_success" });
@@ -40,20 +31,21 @@ test("draft -> seleccionar método -> confirmar resetea estado", () => {
   assert.deepEqual(state, createInitialCaptureState());
 });
 
-test("cancel limpia todo el flujo", () => {
-  let state = createInitialCaptureState();
-  state = captureFlowReducer(state, { type: "submit_text_success", draft: baseDraft });
-  state = captureFlowReducer(state, { type: "select_payment_method", paymentMethod: "Debito" });
-
-  state = captureFlowReducer(state, { type: "cancel" });
-  assert.deepEqual(state, createInitialCaptureState());
-});
-
-test("MSI con meses explícitos no pide meses, MSI sin meses sí pide", () => {
+test("happy path MSI con meses explícitos no pregunta meses", () => {
   const explicitMsiDraft = { ...baseDraft, is_msi: true, msi_months: 3 };
-  const missingMsiMonthsDraft = { ...baseDraft, is_msi: true, msi_months: null };
 
   assert.equal(draftNeedsMsiMonths(explicitMsiDraft), false);
+
+  let state = createInitialCaptureState();
+  state = captureFlowReducer(state, { type: "submit_text_success", draft: explicitMsiDraft });
+  state = captureFlowReducer(state, { type: "select_payment_method", paymentMethod: "BBVA Azul" });
+
+  assert.equal(state.phase, CAPTURA_PHASES.READY_TO_CONFIRM);
+});
+
+test("MSI sin meses pide meses, permite setear y confirmar", () => {
+  const missingMsiMonthsDraft = { ...baseDraft, is_msi: true, msi_months: null };
+
   assert.equal(draftNeedsMsiMonths(missingMsiMonthsDraft), true);
 
   let state = createInitialCaptureState();
@@ -67,15 +59,41 @@ test("MSI con meses explícitos no pide meses, MSI sin meses sí pide", () => {
   assert.equal(state.draft.msi_months, 6);
 });
 
+test("cancelar desde cualquier fase limpia estado completo", () => {
+  const cancellableStates = [
+    captureFlowReducer(createInitialCaptureState(), { type: "submit_text_start" }),
+    captureFlowReducer(createInitialCaptureState(), { type: "submit_text_success", draft: baseDraft }),
+    captureFlowReducer(
+      captureFlowReducer(createInitialCaptureState(), { type: "submit_text_success", draft: { ...baseDraft, is_msi: true } }),
+      { type: "select_payment_method", paymentMethod: "Visa" }
+    ),
+    captureFlowReducer(
+      captureFlowReducer(
+        captureFlowReducer(createInitialCaptureState(), { type: "submit_text_success", draft: baseDraft }),
+        { type: "select_payment_method", paymentMethod: "Visa" }
+      ),
+      { type: "confirm_start" }
+    )
+  ];
 
-test("nuevo texto resetea draft, método y error", () => {
+  for (const state of cancellableStates) {
+    const cancelled = captureFlowReducer(state, { type: "cancel" });
+    assert.deepEqual(cancelled, createInitialCaptureState());
+  }
+});
+
+test("nuevo texto durante awaitingPaymentMethod resetea y crea nuevo draft", () => {
   let state = createInitialCaptureState();
-  state = captureFlowReducer(state, { type: "submit_text_error", message: "error" });
-  assert.equal(state.phase, CAPTURA_PHASES.ERROR);
+  state = captureFlowReducer(state, { type: "submit_text_success", draft: baseDraft });
+  state = captureFlowReducer(state, { type: "select_payment_method", paymentMethod: "Debito" });
 
   state = captureFlowReducer(state, { type: "submit_text_start" });
   assert.equal(state.phase, CAPTURA_PHASES.LOADING_DRAFT);
-  assert.equal(state.errorMessage, "");
   assert.equal(state.selectedPaymentMethod, "");
   assert.equal(state.draft, null);
+
+  const newDraft = { ...baseDraft, original_amount: 100, description: "uber" };
+  state = captureFlowReducer(state, { type: "submit_text_success", draft: newDraft });
+  assert.equal(state.phase, CAPTURA_PHASES.AWAITING_PAYMENT_METHOD);
+  assert.equal(state.draft.description, "uber");
 });

@@ -14,6 +14,10 @@ const bq = new BigQuery({
 
 const defaultQueryFn = (options) => bq.query(options);
 
+function isDevOrTest() {
+  return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+}
+
 export async function handleExpenseCaptureContextGet(
   request,
   {
@@ -31,13 +35,14 @@ export async function handleExpenseCaptureContextGet(
     const chatId = linkedChatId || sessionChatId;
     const context = await fetchExpenseCaptureContext({ userId: authContext.user_id, chatId }, { queryFn });
 
-    console.log("expense_capture_context", {
-      user_id: authContext.user_id,
-      email: session?.user?.email || "",
-      resolvedChatId: chatId || "",
-      counts: context.diagnostics,
-      method_labels: (context.methods || []).map((method) => method.label)
-    });
+    if (isDevOrTest()) {
+      console.log("expense_capture_context", {
+        user_id: authContext.user_id,
+        resolvedChatId: chatId || "",
+        counts: context.diagnostics,
+        method_labels: (context.methods || []).map((method) => method.label)
+      });
+    }
 
     return Response.json({
       ok: true,

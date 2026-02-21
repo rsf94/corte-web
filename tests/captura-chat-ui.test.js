@@ -1,32 +1,58 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
 import test from "node:test";
 
-const capturaChatFile = new URL("../app/dashboard/captura/captura-chat.js", import.meta.url);
+import { CAPTURA_PHASES, captureFlowReducer, createInitialCaptureState } from "../lib/captura_flow.js";
+import {
+  createMethodHint,
+  createWelcomeMessage,
+  resolveDraftMethod,
+  shouldShowTripQuickReplies
+} from "../lib/captura_chat_logic.js";
 
-test("A) UI no muestra quick replies de viaje cuando hasTrip=false", async () => {
-  const source = await fs.readFile(capturaChatFile, "utf8");
+const methods = [
+  { id: "amex", label: "Amex Gold" },
+  { id: "bbva", label: "BBVA Azul" }
+];
 
-  assert.match(source, /const shouldShowTripQuickReplies = Boolean\(flow\.draft && \(hasActiveTrip \|\| flow\.draft\?\.trip_id\)\)/);
-  assert.match(source, /setHasActiveTrip\(backendHasTrip\)/);
-  assert.match(source, /setIncludeTrip\(backendHasTrip\)/);
-  assert.doesNotMatch(source, /<div className="mt-3 flex flex-wrap gap-2">\s*<button[\s\S]*Es del viaje/);
+const draft = {
+  purchase_date: "2026-03-10",
+  original_amount: 100,
+  original_currency: "MXN",
+  amount_mxn: 100,
+  description: "uber",
+  is_msi: false,
+  msi_months: null,
+  payment_method: "amex gold"
+};
+
+test("smoke frontend: render inicial muestra saludo", () => {
+  const firstMessage = createWelcomeMessage();
+  assert.match(firstMessage.text, /Hola/);
+  assert.equal(firstMessage.role, "system");
 });
 
-test("B) UI renderiza métodos cuando existen y evita copy de sin métodos legado", async () => {
-  const source = await fs.readFile(capturaChatFile, "utf8");
-
-  assert.match(source, /\{methodButtons\.map\(\(method\) => \(/);
-  assert.match(source, /No hay métodos de pago disponibles\. Vincula al menos uno para confirmar\./);
-  assert.doesNotMatch(source, /Sin métodos aún/);
+test("smoke frontend: hasTrip=false no muestra controles de viaje", () => {
+  assert.equal(shouldShowTripQuickReplies({ draft, hasActiveTrip: false }), false);
+  assert.equal(shouldShowTripQuickReplies({ draft, hasActiveTrip: true }), true);
 });
 
-test("C) happy path draft->método->confirm guarda y resetea input\/estado", async () => {
-  const source = await fs.readFile(capturaChatFile, "utf8");
+test("smoke frontend: submit texto crea draft, seleccionar método habilita confirmar y confirmar resetea", () => {
+  let state = createInitialCaptureState();
 
-  assert.match(source, /setText\(""\)/);
-  assert.match(source, /dispatch\(\{ type: "submit_text_start" \}\)/);
-  assert.match(source, /dispatch\(\{ type: "select_payment_method", paymentMethod: method \}\)/);
-  assert.match(source, /text: "Guardado ✅"/);
-  assert.match(source, /dispatch\(\{ type: "reset_after_done" \}\)/);
+  state = captureFlowReducer(state, { type: "submit_text_start" });
+  state = captureFlowReducer(state, { type: "submit_text_success", draft });
+  assert.equal(state.phase, CAPTURA_PHASES.AWAITING_PAYMENT_METHOD);
+
+  const match = resolveDraftMethod(draft, methods);
+  assert.equal(match.selectedMethod, "Amex Gold");
+  assert.match(createMethodHint(match), /Método detectado/);
+
+  state = captureFlowReducer(state, { type: "select_payment_method", paymentMethod: match.selectedMethod });
+  assert.equal(state.phase, CAPTURA_PHASES.READY_TO_CONFIRM);
+
+  state = captureFlowReducer(state, { type: "confirm_start" });
+  state = captureFlowReducer(state, { type: "confirm_success" });
+  state = captureFlowReducer(state, { type: "reset_after_done" });
+
+  assert.deepEqual(state, createInitialCaptureState());
 });
