@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ensureUserExistsByEmail, insertChatLink, resolveLatestLinkedChatIdByEmail } from "../lib/identity_links.js";
+import {
+  ensureUserExistsByEmail,
+  insertChatLink,
+  resolveChatIdForUser,
+  resolveLatestLinkedChatIdByEmail
+} from "../lib/identity_links.js";
 
 const envKeys = ["BQ_PROJECT_ID", "BQ_DATASET"];
 
@@ -131,6 +136,24 @@ test("resolve chat authorization follows users -> chat_links", async () => {
     assert.equal(calls.length, 2);
     assert.match(calls[0], /users/);
     assert.match(calls[1], /chat_links/);
+  } finally {
+    restore();
+  }
+});
+
+test("resolveChatIdForUser obtiene chat_id activo para user_id", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const chatId = await resolveChatIdForUser("u-1", {
+      queryFn: async ({ query, params }) => {
+        assert.match(query, /FROM `project\.dataset\.chat_links`/);
+        assert.deepEqual(params, { user_id: "u-1" });
+        return [[{ chat_id: "chat-abc" }]];
+      }
+    });
+
+    assert.equal(chatId, "chat-abc");
   } finally {
     restore();
   }
