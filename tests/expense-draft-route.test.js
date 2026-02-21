@@ -153,3 +153,65 @@ test("POST /api/expense-draft usa parser del core cuando está disponible", asyn
     restore();
   }
 });
+
+
+test("POST /api/expense-draft MSI explícito sin meses conserva is_msi=true y msi_months=null", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpenseDraftPost } = await import("../app/api/expense-draft/route.js");
+    const req = new Request("http://localhost:3000/api/expense-draft", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "250 MSI supermercado" })
+    });
+
+    const response = await handleExpenseDraftPost(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
+        if (resolved) return resolved;
+        if (query.includes("FROM `project.dataset.trips`")) return [[]];
+        return [[]];
+      },
+      now: new Date("2026-01-10T12:00:00.000Z")
+    });
+
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.draft.is_msi, true);
+    assert.equal(body.draft.msi_months, null);
+  } finally {
+    restore();
+  }
+});
+
+test("POST /api/expense-draft no aplica trip_id cuando no hay viaje activo", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpenseDraftPost } = await import("../app/api/expense-draft/route.js");
+    const req = new Request("http://localhost:3000/api/expense-draft", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "230 uber", trip_id: "trip-stale" })
+    });
+
+    const response = await handleExpenseDraftPost(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-123" });
+        if (resolved) return resolved;
+        if (query.includes("FROM `project.dataset.trips`")) return [[]];
+        return [[]];
+      },
+      now: new Date("2026-01-10T12:00:00.000Z")
+    });
+
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.draft.trip_id, null);
+  } finally {
+    restore();
+  }
+});

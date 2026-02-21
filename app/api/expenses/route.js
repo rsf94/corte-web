@@ -188,7 +188,7 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
   const projectId = requiredEnv("BQ_PROJECT_ID");
   const expensesTable = `\`${projectId}.${dataset}.expenses\``;
 
-  const conditions = ["chat_id = @chat_id", "user_id IS NULL"];
+  const conditions = ["chat_id = @chat_id"];
   const params = {
     chat_id: chatId,
     limit_plus_one: filters.limit + 1
@@ -254,6 +254,7 @@ async function fetchLegacyExpenses({ userId, filters, queryFn = defaultQueryFn }
     FROM ${expensesTable}
     WHERE ${conditions.join("\n      AND ")}
     ORDER BY DATE(purchase_date) DESC, created_at DESC, id DESC
+    LIMIT @limit_plus_one
   `;
 
   const [rows] = await queryFn({ query, params });
@@ -348,6 +349,10 @@ export async function handleExpensesPost(
     const authContext = await getAuthedUserContext(request, { getSession, queryFn });
     if (authContext.errorResponse) return authContext.errorResponse;
 
+    if (!authContext.user_id) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const payload = await request.json();
     const coreNormalized = await normalizePayloadWithCore(payload);
     const sourcePayload = coreNormalized && typeof coreNormalized === "object"
@@ -429,7 +434,7 @@ export async function handleExpensesPost(
       (id, purchase_date, amount_mxn, currency, payment_method, category, merchant, description, is_msi, msi_months, trip_id,
        user_id, chat_id, created_at, original_amount, original_currency, fx_rate, fx_provider, fx_date, amount_mxn_source)
       VALUES
-      (@id, DATE(@purchase_date), @amount_mxn, @currency, @payment_method, @category, @merchant, @description, @is_msi, @msi_months, @trip_id,
+      (@id, TIMESTAMP(DATE(@purchase_date)), @amount_mxn, @currency, @payment_method, @category, @merchant, @description, @is_msi, @msi_months, @trip_id,
        @user_id, NULL, CURRENT_TIMESTAMP(), @original_amount, @original_currency, @fx_rate, @fx_provider, @fx_date, @amount_mxn_source)
     `;
 

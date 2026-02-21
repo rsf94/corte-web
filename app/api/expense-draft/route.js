@@ -12,6 +12,55 @@ function normalizeCurrency(value = "") {
   return normalized || "MXN";
 }
 
+
+function sanitizeDetectedCurrency(value = "", text = "") {
+  const normalized = normalizeCurrency(value);
+  if (normalized === "MSI" && /\bmsi\b/i.test(String(text || ""))) return "";
+  return normalized;
+}
+
+function detectMsiFromText(value = "") {
+  const normalized = String(value || "").toLowerCase();
+  if (!/\bmsi\b/.test(normalized)) return { isMsi: false, msiMonths: null };
+
+  const monthsMatch = normalized.match(/(?:\ba\s*)?\b(\d{1,2})\s*msi\b/);
+  if (!monthsMatch) return { isMsi: true, msiMonths: null };
+
+  const parsed = Number.parseInt(monthsMatch[1], 10);
+  return {
+    isMsi: true,
+    msiMonths: Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  };
+}
+
+async function fetchActiveTripForUser(userId, { queryFn }) {
+  if (!userId || typeof queryFn !== "function") return null;
+
+  const dataset = process.env.BQ_DATASET;
+  const projectId = process.env.BQ_PROJECT_ID;
+  if (!dataset || !projectId) return null;
+
+  const tripsTable = `\`${projectId}.${dataset}.trips\``;
+  const result = await queryFn({
+    query: `
+      SELECT id, base_currency
+      FROM ${tripsTable}
+      WHERE user_id = @user_id
+        AND active = TRUE
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    params: { user_id: String(userId) }
+  });
+  const rows = Array.isArray(result?.[0]) ? result[0] : [];
+
+  if (!rows.length) return null;
+  return {
+    id: String(rows[0].id || "").trim(),
+    base_currency: normalizeCurrency(rows[0].base_currency || "")
+  };
+}
+
 export async function handleExpenseDraftPost(
   request,
   {
@@ -29,15 +78,23 @@ export async function handleExpenseDraftPost(
     const payload = await request.json();
     const text = String(payload?.text || "");
     const includeTrip = Boolean(payload?.include_trip ?? true);
-    const tripId = includeTrip ? String(payload?.trip_id || "").trim() : "";
-    const tripCurrency = includeTrip ? normalizeCurrency(payload?.trip_base_currency || "") : "";
+    const activeTrip = includeTrip
+      ? await fetchActiveTripForUser(authContext.user_id, { queryFn })
+      : null;
+    const requestedTripId = includeTrip ? String(payload?.trip_id || "").trim() : "";
+    const tripId = includeTrip
+      ? (requestedTripId && requestedTripId === activeTrip?.id ? requestedTripId : activeTrip?.id || "")
+      : "";
+    const tripCurrency = includeTrip
+      ? normalizeCurrency(payload?.trip_base_currency || activeTrip?.base_currency || "")
+      : "";
 
     const parsed = await parseDraft(text, { now });
     if (parsed.error) {
       return Response.json({ error: parsed.error }, { status: 400 });
     }
 
-    const detectedCurrency = parsed.parsed.detected_currency;
+    const detectedCurrency = sanitizeDetectedCurrency(parsed.parsed.detected_currency, text);
     const originalCurrency = normalizeCurrency(detectedCurrency || tripCurrency || "MXN");
     const originalAmount = Number(parsed.parsed.original_amount);
 
@@ -61,6 +118,10 @@ export async function handleExpenseDraftPost(
       fxDate = conversion.date;
     }
 
+    const msiFromText = detectMsiFromText(text);
+    const draftIsMsi = parsed.parsed.is_msi || msiFromText.isMsi;
+    const draftMsiMonths = parsed.parsed.msi_months ?? msiFromText.msiMonths;
+
     const draft = {
       purchase_date: parsed.parsed.purchase_date,
       original_amount: originalAmount,
@@ -74,8 +135,8 @@ export async function handleExpenseDraftPost(
       merchant: parsed.parsed.merchant,
       category: parsed.parsed.category,
       raw_text: parsed.parsed.raw_text,
-      is_msi: parsed.parsed.is_msi,
-      msi_months: parsed.parsed.msi_months,
+      is_msi: draftIsMsi,
+      msi_months: draftMsiMonths,
       trip_id: tripId || null
     };
 

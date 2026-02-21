@@ -37,10 +37,11 @@ export async function handleExpenseCaptureContextGet(
 
     if (isDevOrTest()) {
       console.log("expense_capture_context", {
-        user_id: authContext.user_id,
-        resolvedChatId: chatId || "",
-        counts: context.diagnostics,
-        method_labels: (context.methods || []).map((method) => method.label)
+        resolved_user_id: authContext.user_id,
+        resolved_chat_id: chatId || "",
+        methods_count_user: context.diagnostics?.methods_user_id ?? 0,
+        methods_count_chat: context.diagnostics?.methods_chat_id ?? 0,
+        methods_final_count: context.diagnostics?.methods_merged ?? 0
       });
     }
 

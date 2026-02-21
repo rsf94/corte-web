@@ -249,7 +249,7 @@ test("GET /api/expenses con fallback usa chat_links y legacy chat_id", async () 
         const resolved = identityResolverQuery(query, { userId: "user-xyz", chatId: "chat-legacy" });
         if (resolved) return resolved;
         if (query.includes("user_id = @user_id")) return [[]];
-        if (query.includes("chat_id = @chat_id") && query.includes("user_id IS NULL")) {
+        if (query.includes("chat_id = @chat_id")) {
           return [[{ id: "1", purchase_date: "2024-01-01", amount_mxn: 1, created_at: "2024-01-01T00:00:00Z" }]];
         }
         return [[]];
@@ -258,7 +258,7 @@ test("GET /api/expenses con fallback usa chat_links y legacy chat_id", async () 
 
     assert.equal(response.status, 200);
     assert.ok(queries.some((entry) => entry.query.includes("FROM `project.dataset.chat_links`")));
-    assert.ok(queries.some((entry) => entry.query.includes("chat_id = @chat_id") && entry.query.includes("user_id IS NULL")));
+    assert.ok(queries.some((entry) => entry.query.includes("chat_id = @chat_id") && !entry.query.includes("user_id IS NULL")));
   } finally {
     restore();
   }
@@ -337,6 +337,88 @@ test("GET /api/expenses pagination usa next_cursor para traer la página siguien
     assert.equal(secondResponse.status, 200);
     assert.deepEqual(secondBody.items.map((item) => item.id), ["c"]);
     assert.equal(secondBody.next_cursor, null);
+  } finally {
+    restore();
+  }
+});
+
+
+test("POST /api/expenses guarda MSI months y user_id válido", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+  let insertParams = {};
+
+  try {
+    const { handleExpensesPost } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purchase_date: "2024-06-10",
+        amount: 450,
+        payment_method: "AMEX",
+        category: "Electronics",
+        is_msi: true,
+        msi_months: 12
+      })
+    });
+
+    const response = await handleExpensesPost(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query, params }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-msi" });
+        if (resolved) return resolved;
+        insertParams = params;
+        return [[]];
+      },
+      uuidFactory: () => "uuid-msi"
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(insertParams.user_id, "user-msi");
+    assert.equal(insertParams.is_msi, true);
+    assert.equal(insertParams.msi_months, 12);
+  } finally {
+    restore();
+  }
+});
+
+test("GET /api/expenses mezcla user+chat, dedupe por id y mantiene orden determinístico", async () => {
+  const restore = withEnv({ BQ_PROJECT_ID: "project", BQ_DATASET: "dataset" });
+
+  try {
+    const { handleExpensesGet } = await import("../app/api/expenses/route.js");
+    const req = new Request("http://localhost:3000/api/expenses?limit=3");
+
+    const response = await handleExpensesGet(req, {
+      getSession: async () => ({ user: { email: "user@example.com" } }),
+      queryFn: async ({ query }) => {
+        const resolved = identityResolverQuery(query, { userId: "user-xyz", chatId: "chat-legacy" });
+        if (resolved) return resolved;
+
+        if (query.includes("user_id = @user_id")) {
+          return [[
+            { id: "u-1", purchase_date: "2024-06-10", created_at: "2024-06-10T10:00:00.000Z", amount_mxn: 100 },
+            { id: "x-dup", purchase_date: "2024-06-09", created_at: "2024-06-09T09:00:00.000Z", amount_mxn: 80 },
+            { id: "u-old", purchase_date: "2024-06-08", created_at: "2024-06-08T08:00:00.000Z", amount_mxn: 60 }
+          ]];
+        }
+
+        if (query.includes("chat_id = @chat_id")) {
+          return [[
+            { id: "c-new", purchase_date: "2024-06-11", created_at: "2024-06-11T11:00:00.000Z", amount_mxn: 120 },
+            { id: "x-dup", purchase_date: "2024-06-09", created_at: "2024-06-09T09:00:00.000Z", amount_mxn: 80 },
+            { id: "c-old", purchase_date: "2024-06-07", created_at: "2024-06-07T07:00:00.000Z", amount_mxn: 40 }
+          ]];
+        }
+
+        return [[]];
+      }
+    });
+
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.items.map((item) => item.id), ["c-new", "u-1", "x-dup"]);
+    assert.ok(body.next_cursor);
   } finally {
     restore();
   }
